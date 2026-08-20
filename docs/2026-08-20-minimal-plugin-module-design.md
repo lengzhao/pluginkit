@@ -418,7 +418,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  PluginPkg["插件作者 import pluginkit"] --> Root["pluginkit\nRegister / Lookup / Spec"]
+  PluginPkg["插件作者 import pluginkit"] --> Root["pluginkit\nRegister / Lookup / Describe"]
   App["使用方 main"] --> Root
   App --> Cfg["config\nPluginUse / Parse"]
   App --> Bld["build\nBuild / GetByID"]
@@ -446,9 +446,32 @@ type Spec struct {
 func Lookup(kind string) (Spec, bool)
 
 func (s Spec) Constructor() any
+
+type PluginDescription struct {
+    Kind       string
+    Config     []FieldDescription
+    Extensions []FieldDescription
+    ReturnType reflect.Type
+}
+
+type FieldDescription struct {
+    Name     string
+    GoName   string
+    Type     reflect.Type
+    List     bool
+    Optional bool
+}
+
+func Describe(kind string) (PluginDescription, bool)
+
+func (d PluginDescription) Template() map[string]any
 ```
 
-根包只描述「有哪些插件类型」。不出现 `PluginUse`，不读配置，不构造实例。
+`Describe` 按 kind 返回已注册插件类型的元信息：配置字段来自 `ConfigType`，依赖扩展点字段来自 `DepsType`。字段名遵循 `json` tag；`omitempty` 表示可选；slice 表示多值。未注册时返回 `false`，不报错。该 API 只描述插件自身 config/deps，不枚举所有插件，不判断插件可放入哪些业务扩展点，也不构造实例。
+
+`PluginDescription.Template` 在 `init()` 注册后即可生成可填写的配置骨架，不调用 `New`。返回格式与 `build` 接受的 `PluginUse` 一致：`config` 为零值占位，必填 `deps` 用 `use: ""` 占位，可选 `deps` 省略。需要 YAML 时由使用方自行 marshal，根包不绑定 YAML/JSON 库。
+
+根包只描述「有哪些插件类型」。不出现 `PluginUse`，不读配置、不构造实例。
 
 ### 11.2 配置 `pluginkit/config`
 

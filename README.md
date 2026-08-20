@@ -3,7 +3,7 @@
 启动期插件装配库：插件作者只注册类型，使用方用实例图和 root id 构造根插件；插件依赖既可以引用已有实例，也可以直接内联私有插件。
 
 ```
-github.com/lengzhao/pluginkit          插件类型：Register / Lookup / Spec
+github.com/lengzhao/pluginkit          插件类型：Register / Lookup / Describe
 github.com/lengzhao/pluginkit/config   配置识别：PluginUse / Parse
 github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / GetByID
 ```
@@ -78,6 +78,46 @@ agent:
 内联实例未写 `id` 时按路径生成，例如 `workflow.steps[0]`。需要复用的实例放到顶层并用 id 引用。插件自己的 `config` 按 JSON 解到构造函数参数，未知字段会失败。
 
 `BuildInto` 仍可用于直接填充 target struct，但 workflow、agent、ETL 这类编排应优先建模为 root plugin，把引用和内联子插件放进插件 `Deps`。
+
+## 查看插件配置与扩展点
+
+按 kind 查看已注册插件类型的配置字段和依赖扩展点：
+
+```go
+desc, ok := pluginkit.Describe("openai")
+if !ok {
+    // 未注册
+}
+for _, field := range desc.Config {
+    // field.Name 对应 config 里的 key
+}
+for _, ext := range desc.Extensions {
+    // ext.Name 对应 deps 里的 key；ext.List 表示多值；ext.Optional 表示可选
+}
+```
+
+`init()` 注册后、`New()` 之前，可导出可填写的配置骨架：
+
+```go
+desc, ok := pluginkit.Describe("agent")
+if !ok {
+    // 未注册
+}
+tmpl := desc.Template()
+```
+
+`Template()` 返回 `map[string]any`，格式与 `build.Build` 接受的 `PluginUse` 一致。`config` 为零值占位，必填 `deps` 用 `use: ""` 占位，可选 `deps` 会省略。需要 YAML 时由使用方自行 `yaml.Marshal(tmpl)`。
+
+```yaml
+use: agent
+config:
+  model: ""
+deps:
+  llm:
+    use: ""
+  tools:
+    - use: ""
+```
 
 ## 示例
 
