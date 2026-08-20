@@ -1,0 +1,12 @@
+agent:
+  use: agent
+  deps:
+    llm:
+      use: openai
+      config:
+        model: gpt-5.5
+    tools:
+      - use: read-file
+        config:
+          root: .
+      - use: shell

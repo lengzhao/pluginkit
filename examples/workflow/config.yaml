@@ -1,0 +1,9 @@
+workflow:
+  use: sequential-workflow
+  deps:
+    steps:
+      - use: http-step
+      - use: save-step
+        deps:
+          store:
+            use: sqlite-store

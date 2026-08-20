@@ -1,0 +1,17 @@
+workflow:
+  use: sequential-workflow
+  deps:
+    steps:
+      - fetch
+      - save
+
+fetch:
+  use: http-step
+
+save:
+  use: save-step
+  deps:
+    store: store
+
+store:
+  use: sqlite-store
