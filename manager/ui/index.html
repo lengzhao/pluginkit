@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pluginkit manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">
+      <h1>pluginkit manager</h1>
+      <p>内联实例图 · 可视化编辑配置</p>
+    </div>
+    <div class="controls">
+      <label>
+        Root ID
+        <input id="rootId" type="text" value="agent" placeholder="agent">
+      </label>
+      <label>
+        Root Kind
+        <select id="rootKind"></select>
+      </label>
+      <button id="btnNew" type="button">新建</button>
+      <button id="btnValidate" type="button">校验</button>
+      <button id="btnExport" type="button">导出 YAML</button>
+      <button id="btnImport" type="button">导入 YAML</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <h2>插件目录</h2>
+      <input id="catalogFilter" type="search" placeholder="搜索 kind...">
+      <ul id="catalogList" class="catalog-list"></ul>
+    </aside>
+
+    <section class="canvas">
+      <div id="status" class="status"></div>
+      <div id="graph" class="graph"></div>
+    </section>
+
+    <aside class="panel">
+      <h2>YAML 预览</h2>
+      <pre id="yamlPreview" class="yaml-preview"></pre>
+    </aside>
+  </main>
+
+  <dialog id="pickerDialog">
+    <form method="dialog">
+      <h3 id="pickerTitle">选择插件</h3>
+      <input id="pickerFilter" type="search" placeholder="过滤 kind...">
+      <ul id="pickerList" class="picker-list"></ul>
+      <div class="dialog-actions">
+        <button value="cancel" type="submit">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="configDialog">
+    <form method="dialog" id="configForm">
+      <h3 id="configTitle">编辑 config</h3>
+      <div id="configFields" class="config-fields"></div>
+      <div class="dialog-actions">
+        <button value="cancel" type="submit">取消</button>
+        <button id="configSave" value="default" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="yamlDialog">
+    <form method="dialog" id="yamlForm">
+      <h3>导入 YAML</h3>
+      <textarea id="yamlInput" rows="16" placeholder="粘贴 YAML..."></textarea>
+      <div class="dialog-actions">
+        <button value="cancel" type="submit">取消</button>
+        <button id="yamlImportConfirm" value="default" type="submit">导入</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

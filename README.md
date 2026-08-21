@@ -6,6 +6,7 @@
 github.com/lengzhao/pluginkit          插件类型：Register / Lookup / Describe
 github.com/lengzhao/pluginkit/config   配置识别：PluginUse / Parse
 github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / GetByID
+github.com/lengzhao/pluginkit/manager  Web 配置管理 UI（可选）
 ```
 
 根包不读配置、不构造实例。`config` 不查注册表、不调用 `New`。`build` 不解释 `agent` / `workflow` / `etl` 等业务字段。
@@ -119,6 +120,39 @@ deps:
     - use: ""
 ```
 
+按接口类型查找可用插件、列出全部 kind：
+
+```go
+for _, kind := range pluginkit.ListKinds() {
+    // ...
+}
+for _, kind := range pluginkit.CompatibleKinds(reflect.TypeOf((*agent.Tool)(nil)).Elem()) {
+    // ...
+}
+```
+
+## Web Manager
+
+可嵌入宿主 binary 的可视化配置编辑器（内联 root 实例图）：
+
+```go
+import "github.com/lengzhao/pluginkit/manager"
+
+func main() {
+    // 先 import 自己的插件包，触发 init Register
+    manager.Run(manager.Options{Addr: ":8080"})
+}
+```
+
+Demo：
+
+```bash
+go run ./examples/manager
+# 打开 http://localhost:8080
+```
+
+详见 [docs/2026-08-21-web-manager.md](docs/2026-08-21-web-manager.md)。
+
 ## 示例
 
 ```bash
@@ -127,4 +161,6 @@ cd examples/agent && go run . config.flat.yaml
 
 cd examples/workflow && go run .
 cd examples/workflow && go run . config.flat.yaml
+
+go run ./examples/manager
 ```
