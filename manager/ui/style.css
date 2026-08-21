@@ -195,6 +195,43 @@ button:hover {
   color: var(--accent-2);
 }
 
+.view-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.graph.flat-view {
+  display: grid;
+  gap: 12px;
+}
+
+.flat-link {
+  border: 1px solid rgba(91, 156, 255, 0.35);
+  background: rgba(91, 156, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.flat-link:hover {
+  border-color: var(--accent);
+}
+
+.flat-link .kind {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.flat-link .path {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
 .shared-list {
   display: grid;
   gap: 12px;

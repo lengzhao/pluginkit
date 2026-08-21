@@ -1,3 +1,5 @@
+const VIEW_MODE_KEY = "pluginkit-manager-view";
+
 const state = {
   catalog: [],
   catalogByKind: new Map(),
@@ -6,6 +8,7 @@ const state = {
     plugin: { use: "agent", config: {}, deps: {} },
     shared: {},
   },
+  viewMode: loadViewMode(),
   picker: null,
   pickerMode: "inline",
   configTarget: null,
@@ -37,7 +40,147 @@ const els = {
   sharedForm: document.getElementById("sharedForm"),
   sharedId: document.getElementById("sharedId"),
   sharedKind: document.getElementById("sharedKind"),
+  btnViewTree: document.getElementById("btnViewTree"),
+  btnViewFlat: document.getElementById("btnViewFlat"),
 };
+
+function loadViewMode() {
+  const saved = localStorage.getItem(VIEW_MODE_KEY);
+  return saved === "flat" ? "flat" : "tree";
+}
+
+function isFlatView() {
+  return state.viewMode === "flat";
+}
+
+function syncViewModeButtons() {
+  els.btnViewTree?.classList.toggle("active", state.viewMode === "tree");
+  els.btnViewFlat?.classList.toggle("active", state.viewMode === "flat");
+}
+
+function setViewMode(mode) {
+  const prev = state.viewMode;
+  state.viewMode = mode === "flat" ? "flat" : "tree";
+  localStorage.setItem(VIEW_MODE_KEY, state.viewMode);
+  syncViewModeButtons();
+  let statusMsg = null;
+  if (state.viewMode === "tree" && prev !== "tree") {
+    const inlined = inlineSingleUseShared(state.document);
+    if (inlined > 0) {
+      statusMsg = `已内联 ${inlined} 个仅引用一次的共享实例`;
+    }
+  }
+  renderGraph();
+  renderSharedList();
+  refreshPreview();
+  if (statusMsg) {
+    setStatus(statusMsg, "ok");
+  }
+}
+
+function clonePluginNode(node) {
+  return structuredClone(node);
+}
+
+function countReferencesInDocument(document, instanceId) {
+  let count = 0;
+  function walk(node) {
+    for (const raw of Object.values(node.deps || {})) {
+      if (typeof raw === "string") {
+        if (raw === instanceId) count += 1;
+      } else if (Array.isArray(raw)) {
+        for (const item of raw) {
+          if (typeof item === "string") {
+            if (item === instanceId) count += 1;
+          } else if (item && typeof item === "object") {
+            walk(item);
+          }
+        }
+      } else if (raw && typeof raw === "object") {
+        walk(raw);
+      }
+    }
+  }
+  walk(document.plugin);
+  for (const node of Object.values(document.shared || {})) {
+    walk(node);
+  }
+  return count;
+}
+
+function findReferenceLocation(document, instanceId) {
+  let found = null;
+  function walk(node) {
+    if (found) return;
+    for (const [extName, raw] of Object.entries(node.deps || {})) {
+      if (typeof raw === "string") {
+        if (raw === instanceId) {
+          found = { node, extName, index: null };
+          return;
+        }
+      } else if (Array.isArray(raw)) {
+        for (let index = 0; index < raw.length; index++) {
+          const item = raw[index];
+          if (typeof item === "string" && item === instanceId) {
+            found = { node, extName, index };
+            return;
+          }
+          if (item && typeof item === "object") {
+            walk(item);
+            if (found) return;
+          }
+        }
+      } else if (raw && typeof raw === "object") {
+        walk(raw);
+      }
+    }
+  }
+  walk(document.plugin);
+  for (const node of Object.values(document.shared || {})) {
+    walk(node);
+    if (found) return found;
+  }
+  return found;
+}
+
+function replaceReferenceWithInline(location, inlineNode) {
+  const { node, extName, index } = location;
+  if (index == null) {
+    node.deps[extName] = inlineNode;
+    return;
+  }
+  node.deps[extName][index] = inlineNode;
+}
+
+// 树状视图下，仅被引用一次的共享实例内联到引用处并移出 shared。
+function inlineSingleUseShared(document) {
+  if (!document.shared) {
+    document.shared = {};
+  }
+  let total = 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of [...Object.keys(document.shared)]) {
+      if (countReferencesInDocument(document, id) !== 1) {
+        continue;
+      }
+      const location = findReferenceLocation(document, id);
+      if (!location) {
+        continue;
+      }
+      replaceReferenceWithInline(location, clonePluginNode(document.shared[id]));
+      delete document.shared[id];
+      total += 1;
+      changed = true;
+      break;
+    }
+  }
+  if (Object.keys(document.shared).length === 0) {
+    document.shared = {};
+  }
+  return total;
+}
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -155,29 +298,7 @@ function resolveSharedNode(refId) {
 }
 
 function countReferences(instanceId) {
-  let count = 0;
-  function walk(node) {
-    for (const raw of Object.values(node.deps || {})) {
-      if (typeof raw === "string") {
-        if (raw === instanceId) count += 1;
-      } else if (Array.isArray(raw)) {
-        for (const item of raw) {
-          if (typeof item === "string") {
-            if (item === instanceId) count += 1;
-          } else if (item && typeof item === "object") {
-            walk(item);
-          }
-        }
-      } else if (raw && typeof raw === "object") {
-        walk(raw);
-      }
-    }
-  }
-  walk(state.document.plugin);
-  for (const node of Object.values(ensureShared())) {
-    walk(node);
-  }
-  return count;
+  return countReferencesInDocument(state.document, instanceId);
 }
 
 function renderAll() {
@@ -224,7 +345,7 @@ function renderSharedCard(id, node) {
   );
   card.appendChild(header);
   bindConfigActions(card, node, `@shared:${id}`);
-  card.appendChild(renderExtensions(node, `@shared:${id}`));
+  card.appendChild(renderExtensions(node, `@shared:${id}`, { flat: isFlatView() }));
   return card;
 }
 
@@ -241,10 +362,90 @@ function removeSharedInstance(id) {
 
 function renderGraph() {
   els.graph.innerHTML = "";
+  els.graph.classList.toggle("flat-view", isFlatView());
+  if (isFlatView()) {
+    renderFlatGraph();
+    return;
+  }
+  renderTreeGraph();
+}
+
+function renderTreeGraph() {
   const root = document.createElement("div");
   root.className = "graph-root";
   root.appendChild(renderNode(state.document.plugin, "root", true));
   els.graph.appendChild(root);
+}
+
+function collectInlineEntries(node, path, out) {
+  out.push({ node, path, isRoot: path === "root" });
+  const desc = getDescribe(node.use) || { extensions: [] };
+  for (const ext of desc.extensions || []) {
+    const dep = node.deps?.[ext.name];
+    if (dep == null) continue;
+    if (ext.list) {
+      const items = Array.isArray(dep) ? dep : [];
+      items.forEach((item, index) => {
+        if (typeof item === "string") return;
+        collectInlineEntries(item, `${path}.${ext.name}[${index}]`, out);
+      });
+      continue;
+    }
+    if (typeof dep === "string") continue;
+    collectInlineEntries(dep, `${path}.${ext.name}`, out);
+  }
+}
+
+function renderFlatGraph() {
+  const entries = [];
+  collectInlineEntries(state.document.plugin, "root", entries);
+  for (const entry of entries) {
+    els.graph.appendChild(renderFlatNode(entry.node, entry.path, entry.isRoot));
+  }
+}
+
+function renderFlatNode(node, path, isRoot = false) {
+  const card = document.createElement("div");
+  card.className = `node-card${isRoot ? " root" : ""}`;
+  card.dataset.path = path;
+
+  const header = document.createElement("div");
+  header.className = "node-header";
+  header.innerHTML = `
+    <div class="node-title">
+      <div class="kind">${node.use}</div>
+      <div class="path">${path}</div>
+    </div>
+    <div class="node-actions">
+      ${renderConfigButton(node, path)}
+      ${isRoot ? "" : `<button type="button" data-action="remove">删除</button>`}
+    </div>
+  `;
+  const removeBtn = header.querySelector('[data-action="remove"]');
+  if (removeBtn) {
+    removeBtn.addEventListener("click", () => removeNode(path));
+  }
+
+  card.appendChild(header);
+  bindConfigActions(card, node, path);
+  card.appendChild(renderExtensions(node, path, { flat: true }));
+  return card;
+}
+
+function scrollToPath(path) {
+  const target = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderFlatLink(node, path) {
+  const link = document.createElement("div");
+  link.className = "flat-link";
+  link.innerHTML = `
+    <span class="kind">${node.use}</span>
+    <span class="path">${path}</span>
+  `;
+  link.addEventListener("click", () => scrollToPath(path));
+  return link;
 }
 
 function renderNode(node, path, isRoot = false) {
@@ -275,7 +476,7 @@ function renderNode(node, path, isRoot = false) {
   return card;
 }
 
-function renderExtensions(node, path) {
+function renderExtensions(node, path, options = {}) {
   const extensions = document.createElement("div");
   extensions.className = "extensions";
   const desc = getDescribe(node.use) || { extensions: [] };
@@ -285,7 +486,7 @@ function renderExtensions(node, path) {
       extensions.appendChild(renderOptionalExtension(node, path, ext));
       continue;
     }
-    extensions.appendChild(renderExtension(node, path, ext));
+    extensions.appendChild(renderExtension(node, path, ext, options));
   }
   return extensions;
 }
@@ -307,7 +508,8 @@ function renderOptionalExtension(node, path, ext) {
   return optional;
 }
 
-function renderExtension(node, path, ext) {
+function renderExtension(node, path, ext, options = {}) {
+  const flat = options.flat === true;
   const wrap = document.createElement("div");
   wrap.className = "extension";
   const head = document.createElement("div");
@@ -333,20 +535,28 @@ function renderExtension(node, path, ext) {
       body.appendChild(renderEmptySlot(node, path, ext.name, true));
     } else {
       items.forEach((item, index) => {
+        const childPath = `${path}.${ext.name}[${index}]`;
         if (typeof item === "string") {
-          body.appendChild(renderRefNode(item, `${path}.${ext.name}[${index}]`, ext.name, index));
+          body.appendChild(renderRefNode(item, childPath, ext.name, index));
+        } else if (flat) {
+          body.appendChild(renderFlatLink(item, childPath));
         } else {
-          body.appendChild(renderNode(item, `${path}.${ext.name}[${index}]`));
+          body.appendChild(renderNode(item, childPath));
         }
       });
       body.appendChild(renderEmptySlot(node, path, ext.name, true));
     }
   } else {
     const dep = node.deps?.[ext.name];
+    const childPath = `${path}.${ext.name}`;
     if (typeof dep === "string") {
-      body.appendChild(renderRefNode(dep, `${path}.${ext.name}`, ext.name));
+      body.appendChild(renderRefNode(dep, childPath, ext.name));
     } else if (dep) {
-      body.appendChild(renderNode(dep, `${path}.${ext.name}`));
+      if (flat) {
+        body.appendChild(renderFlatLink(dep, childPath));
+      } else {
+        body.appendChild(renderNode(dep, childPath));
+      }
     } else if (!ext.optional) {
       body.appendChild(renderEmptySlot(node, path, ext.name, false));
     }
@@ -763,8 +973,15 @@ document.getElementById("yamlForm").addEventListener("submit", async (event) => 
     els.rootKind.value = doc.plugin.use;
     state.document.plugin = doc.plugin;
     state.document.shared = doc.shared || {};
+    let status = "导入成功";
+    if (!isFlatView()) {
+      const inlined = inlineSingleUseShared(state.document);
+      if (inlined > 0) {
+        status = `导入成功，已内联 ${inlined} 个仅引用一次的共享实例`;
+      }
+    }
     renderAll();
-    setStatus("导入成功", "ok");
+    setStatus(status, "ok");
   } catch (err) {
     setStatus(err.message, "err");
   }
@@ -807,6 +1024,8 @@ els.sharedForm.addEventListener("submit", async (event) => {
 
 els.pickerModeInline.addEventListener("click", () => setPickerMode("inline"));
 els.pickerModeRef.addEventListener("click", () => setPickerMode("ref"));
+els.btnViewTree?.addEventListener("click", () => setViewMode("tree"));
+els.btnViewFlat?.addEventListener("click", () => setViewMode("flat"));
 
 els.rootId.addEventListener("change", refreshPreview);
 els.rootKind.addEventListener("change", () => newDocument(els.rootKind.value));
@@ -818,6 +1037,7 @@ async function boot() {
   state.catalog = data.kinds || [];
   state.catalogByKind = new Map(state.catalog.map((item) => [item.kind, item]));
   fillRootKindOptions();
+  syncViewModeButtons();
   renderCatalog();
   if (state.catalog.some((item) => item.kind === "agent")) {
     await newDocument("agent");
