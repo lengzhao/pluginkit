@@ -29,7 +29,7 @@ func demoValidateBuild(ctx context.Context, doc manager.Document) error {
 	graph := doc.ToGraph()
 	switch doc.Plugin.Use {
 	case "agent":
-		_, _, err := build.Build[*agent](ctx, graph, doc.RootID)
+		_, _, err := build.Build[Agent](ctx, graph, doc.RootID)
 		return err
 	case "sequential-workflow":
 		_, _, err := build.Build[Workflow](ctx, graph, doc.RootID)

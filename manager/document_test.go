@@ -27,9 +27,6 @@ func TestDocumentInlineRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(yamlBytes), "openai-1") {
-		t.Fatalf("inline export must not use reference ids: %s", yamlBytes)
-	}
 
 	loaded, err := FromYAML(yamlBytes)
 	if err != nil {
@@ -38,18 +35,107 @@ func TestDocumentInlineRoundTrip(t *testing.T) {
 	if loaded.RootID != "agent" || loaded.Plugin.Use != "agent" {
 		t.Fatalf("loaded=%+v", loaded)
 	}
+	if len(loaded.Shared) != 0 {
+		t.Fatalf("expected no shared instances, got %#v", loaded.Shared)
+	}
 }
 
-func TestFromYAMLRejectsReference(t *testing.T) {
-	raw := []byte(`agent:
-  use: agent
+func TestDocumentSharedRoundTrip(t *testing.T) {
+	doc := Document{
+		RootID: "workflow",
+		Plugin: PluginNode{
+			Use: "workflow",
+			Deps: map[string]any{
+				"steps": []any{
+					"fetch",
+					PluginNode{
+						Use: "save-step",
+						Deps: map[string]any{
+							"store": "store",
+						},
+					},
+				},
+			},
+		},
+		Shared: map[string]PluginNode{
+			"fetch": {Use: "http-step"},
+			"store": {Use: "sqlite-store", Config: map[string]any{"path": "/tmp/db"}},
+		},
+	}
+
+	yamlBytes, err := doc.ToYAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(yamlBytes), "store: store") {
+		t.Fatalf("expected reference in yaml: %s", yamlBytes)
+	}
+	if !strings.Contains(string(yamlBytes), "fetch:") {
+		t.Fatalf("expected shared fetch in yaml: %s", yamlBytes)
+	}
+
+	loaded, err := FromYAML(yamlBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.RootID != "workflow" {
+		t.Fatalf("root=%q", loaded.RootID)
+	}
+	if len(loaded.Shared) != 2 {
+		t.Fatalf("shared=%#v", loaded.Shared)
+	}
+	steps, ok := loaded.Plugin.Deps["steps"].([]any)
+	if !ok || len(steps) != 2 {
+		t.Fatalf("steps=%#v", loaded.Plugin.Deps["steps"])
+	}
+	if steps[0] != "fetch" {
+		t.Fatalf("steps[0]=%#v want fetch ref", steps[0])
+	}
+}
+
+func TestFromYAMLRejectsAmbiguousRoot(t *testing.T) {
+	raw := []byte(`workflow:
+  use: workflow
   deps:
-    llm: openai
-openai:
-  use: openai
+    cache: cache
+cache:
+  use: redis-cache
+agent:
+  use: agent
 `)
 	_, err := FromYAML(raw)
 	if err == nil {
-		t.Fatal("expected reference yaml to fail")
+		t.Fatal("expected ambiguous root error")
+	}
+	if !strings.Contains(err.Error(), "multiple unreferenced") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFromYAMLImportSharedOnlyReferences(t *testing.T) {
+	raw := []byte(`workflow:
+  use: workflow
+  deps:
+    steps:
+      - fetch
+      - save
+fetch:
+  use: http-step
+save:
+  use: save-step
+  deps:
+    store: store
+store:
+  use: sqlite-store
+`)
+	doc, err := FromYAML(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.RootID != "workflow" {
+		t.Fatalf("root=%q", doc.RootID)
+	}
+	if len(doc.Shared) != 3 {
+		t.Fatalf("shared=%#v", doc.Shared)
 	}
 }

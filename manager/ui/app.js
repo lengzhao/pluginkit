@@ -4,8 +4,10 @@ const state = {
   document: {
     rootId: "agent",
     plugin: { use: "agent", config: {}, deps: {} },
+    shared: {},
   },
   picker: null,
+  pickerMode: "inline",
   configTarget: null,
 };
 
@@ -14,11 +16,15 @@ const els = {
   rootKind: document.getElementById("rootKind"),
   catalogList: document.getElementById("catalogList"),
   catalogFilter: document.getElementById("catalogFilter"),
+  sharedList: document.getElementById("sharedList"),
   graph: document.getElementById("graph"),
   status: document.getElementById("status"),
   yamlPreview: document.getElementById("yamlPreview"),
   pickerDialog: document.getElementById("pickerDialog"),
   pickerTitle: document.getElementById("pickerTitle"),
+  pickerMode: document.getElementById("pickerMode"),
+  pickerModeInline: document.getElementById("pickerModeInline"),
+  pickerModeRef: document.getElementById("pickerModeRef"),
   pickerList: document.getElementById("pickerList"),
   pickerFilter: document.getElementById("pickerFilter"),
   configDialog: document.getElementById("configDialog"),
@@ -27,6 +33,10 @@ const els = {
   configForm: document.getElementById("configForm"),
   yamlDialog: document.getElementById("yamlDialog"),
   yamlInput: document.getElementById("yamlInput"),
+  sharedDialog: document.getElementById("sharedDialog"),
+  sharedForm: document.getElementById("sharedForm"),
+  sharedId: document.getElementById("sharedId"),
+  sharedKind: document.getElementById("sharedKind"),
 };
 
 async function api(path, options = {}) {
@@ -46,10 +56,18 @@ function setStatus(text, kind = "info") {
   els.status.className = `status ${kind}`;
 }
 
+function ensureShared() {
+  if (!state.document.shared) state.document.shared = {};
+  return state.document.shared;
+}
+
 function currentDocument() {
+  const shared = state.document.shared || {};
+  const hasShared = Object.keys(shared).length > 0;
   return {
     rootId: els.rootId.value.trim(),
     plugin: structuredClone(state.document.plugin),
+    ...(hasShared ? { shared: structuredClone(shared) } : {}),
   };
 }
 
@@ -74,11 +92,14 @@ function renderCatalog(filter = "") {
 
 function fillRootKindOptions() {
   els.rootKind.innerHTML = "";
+  els.sharedKind.innerHTML = "";
   for (const item of state.catalog) {
-    const opt = document.createElement("option");
-    opt.value = item.kind;
-    opt.textContent = item.kind;
-    els.rootKind.appendChild(opt);
+    for (const select of [els.rootKind, els.sharedKind]) {
+      const opt = document.createElement("option");
+      opt.value = item.kind;
+      opt.textContent = item.kind;
+      select.appendChild(opt);
+    }
   }
 }
 
@@ -93,13 +114,129 @@ async function newDocument(kind) {
     config: tmpl.config || {},
     deps: {},
   };
-  renderGraph();
-  refreshPreview();
+  state.document.shared = {};
+  renderAll();
   setStatus(`已新建 root kind: ${kind}`);
 }
 
 function getDescribe(kind) {
   return state.catalogByKind.get(kind);
+}
+
+function hasConfigFields(kind) {
+  const desc = getDescribe(kind);
+  return Array.isArray(desc?.config) && desc.config.length > 0;
+}
+
+function renderConfigButton(node, path) {
+  if (!hasConfigFields(node.use)) {
+    return "";
+  }
+  return `<button type="button" data-action="config">config</button>`;
+}
+
+function bindConfigActions(card, node, path) {
+  if (!hasConfigFields(node.use)) {
+    return;
+  }
+  card.querySelector('[data-action="config"]')?.addEventListener("click", () => openConfig(node, path));
+  card.addEventListener("dblclick", () => openConfig(node, path));
+}
+
+function resolveSharedNode(refId) {
+  if (refId === els.rootId.value.trim()) {
+    return { node: state.document.plugin, source: "root" };
+  }
+  const shared = ensureShared();
+  if (shared[refId]) {
+    return { node: shared[refId], source: "shared" };
+  }
+  return { node: null, source: "missing" };
+}
+
+function countReferences(instanceId) {
+  let count = 0;
+  function walk(node) {
+    for (const raw of Object.values(node.deps || {})) {
+      if (typeof raw === "string") {
+        if (raw === instanceId) count += 1;
+      } else if (Array.isArray(raw)) {
+        for (const item of raw) {
+          if (typeof item === "string") {
+            if (item === instanceId) count += 1;
+          } else if (item && typeof item === "object") {
+            walk(item);
+          }
+        }
+      } else if (raw && typeof raw === "object") {
+        walk(raw);
+      }
+    }
+  }
+  walk(state.document.plugin);
+  for (const node of Object.values(ensureShared())) {
+    walk(node);
+  }
+  return count;
+}
+
+function renderAll() {
+  renderSharedList();
+  renderGraph();
+  refreshPreview();
+}
+
+function renderSharedList() {
+  if (!els.sharedList) return;
+  els.sharedList.innerHTML = "";
+  const shared = ensureShared();
+  const ids = Object.keys(shared).sort();
+  if (ids.length === 0) {
+    els.sharedList.innerHTML =
+      `<div class="shared-empty">暂无共享实例。添加后可被多个依赖引用（<code>deps: instance-id</code>）。</div>`;
+    return;
+  }
+  for (const id of ids) {
+    els.sharedList.appendChild(renderSharedCard(id, shared[id]));
+  }
+}
+
+function renderSharedCard(id, node) {
+  const card = document.createElement("div");
+  card.className = "shared-card";
+  card.dataset.sharedId = id;
+
+  const refCount = countReferences(id);
+  const header = document.createElement("div");
+  header.className = "node-header";
+  header.innerHTML = `
+    <div class="node-title">
+      <div class="kind">${node.use}</div>
+      <div class="path">${id}${refCount ? ` · 引用 ${refCount} 处` : ""}</div>
+    </div>
+    <div class="node-actions">
+      ${renderConfigButton(node, `@shared:${id}`)}
+      <button type="button" data-action="remove">删除</button>
+    </div>
+  `;
+  header.querySelector('[data-action="remove"]').addEventListener("click", () =>
+    removeSharedInstance(id)
+  );
+  card.appendChild(header);
+  bindConfigActions(card, node, `@shared:${id}`);
+  card.appendChild(renderExtensions(node, `@shared:${id}`));
+  return card;
+}
+
+function removeSharedInstance(id) {
+  const refs = countReferences(id);
+  if (refs > 0) {
+    setStatus(`无法删除：${id} 仍被引用 ${refs} 处`, "err");
+    return;
+  }
+  delete ensureShared()[id];
+  renderAll();
+  setStatus(`已删除共享实例 ${id}`, "ok");
 }
 
 function renderGraph() {
@@ -115,7 +252,6 @@ function renderNode(node, path, isRoot = false) {
   card.className = `node-card${isRoot ? " root" : ""}`;
   card.dataset.path = path;
 
-  const desc = getDescribe(node.use) || { extensions: [], config: [] };
   const header = document.createElement("div");
   header.className = "node-header";
   header.innerHTML = `
@@ -124,22 +260,25 @@ function renderNode(node, path, isRoot = false) {
       <div class="path">${path}</div>
     </div>
     <div class="node-actions">
-      <button type="button" data-action="config">config</button>
+      ${renderConfigButton(node, path)}
       ${isRoot ? "" : `<button type="button" data-action="remove">删除</button>`}
     </div>
   `;
-  header.querySelector('[data-action="config"]').addEventListener("click", () => openConfig(node, path));
-  card.addEventListener("dblclick", () => openConfig(node, path));
-
   const removeBtn = header.querySelector('[data-action="remove"]');
   if (removeBtn) {
     removeBtn.addEventListener("click", () => removeNode(path));
   }
 
   card.appendChild(header);
+  bindConfigActions(card, node, path);
+  card.appendChild(renderExtensions(node, path));
+  return card;
+}
 
+function renderExtensions(node, path) {
   const extensions = document.createElement("div");
   extensions.className = "extensions";
+  const desc = getDescribe(node.use) || { extensions: [] };
 
   for (const ext of desc.extensions || []) {
     if (ext.optional && !node.deps?.[ext.name]) {
@@ -148,9 +287,7 @@ function renderNode(node, path, isRoot = false) {
     }
     extensions.appendChild(renderExtension(node, path, ext));
   }
-
-  card.appendChild(extensions);
-  return card;
+  return extensions;
 }
 
 function renderOptionalExtension(node, path, ext) {
@@ -196,18 +333,60 @@ function renderExtension(node, path, ext) {
       body.appendChild(renderEmptySlot(node, path, ext.name, true));
     } else {
       items.forEach((item, index) => {
-        body.appendChild(renderNode(item, `${path}.${ext.name}[${index}]`));
+        if (typeof item === "string") {
+          body.appendChild(renderRefNode(item, `${path}.${ext.name}[${index}]`, ext.name, index));
+        } else {
+          body.appendChild(renderNode(item, `${path}.${ext.name}[${index}]`));
+        }
       });
       body.appendChild(renderEmptySlot(node, path, ext.name, true));
     }
-  } else if (node.deps?.[ext.name]) {
-    body.appendChild(renderNode(node.deps[ext.name], `${path}.${ext.name}`));
-  } else if (!ext.optional) {
-    body.appendChild(renderEmptySlot(node, path, ext.name, false));
+  } else {
+    const dep = node.deps?.[ext.name];
+    if (typeof dep === "string") {
+      body.appendChild(renderRefNode(dep, `${path}.${ext.name}`, ext.name));
+    } else if (dep) {
+      body.appendChild(renderNode(dep, `${path}.${ext.name}`));
+    } else if (!ext.optional) {
+      body.appendChild(renderEmptySlot(node, path, ext.name, false));
+    }
   }
 
   wrap.appendChild(body);
   return wrap;
+}
+
+function renderRefNode(refId, path, extName, index = null) {
+  const resolved = resolveSharedNode(refId);
+  const card = document.createElement("div");
+  card.className = "ref-card";
+  card.dataset.path = path;
+  const kind = resolved.node?.use || "unknown";
+  const sourceLabel = resolved.source === "root" ? "root" : "shared";
+  card.innerHTML = `
+    <div>
+      <div class="ref-label">→ ${refId}</div>
+      <div class="ref-meta">${sourceLabel} · ${kind}</div>
+    </div>
+    <div class="node-actions">
+      <button type="button" data-action="goto">查看</button>
+      <button type="button" data-action="remove">解除</button>
+    </div>
+  `;
+  card.querySelector('[data-action="goto"]').addEventListener("click", () => {
+    if (resolved.source === "shared") {
+      const target = document.querySelector(`[data-shared-id="${refId}"]`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (resolved.source === "root") {
+      document.querySelector(".graph-root")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      setStatus(`引用目标 ${refId} 不存在`, "err");
+    }
+  });
+  card.querySelector('[data-action="remove"]').addEventListener("click", () => {
+    removeRef(path, extName, index);
+  });
+  return card;
 }
 
 function renderEmptySlot(node, path, extName, isList) {
@@ -225,6 +404,9 @@ function ensureDeps(node) {
 
 function resolveNode(path) {
   if (path === "root") return state.document.plugin;
+  if (path.startsWith("@shared:")) {
+    return ensureShared()[path.slice(8)];
+  }
   const parts = path.slice(5).split(".");
   let current = state.document.plugin;
   for (const part of parts) {
@@ -264,29 +446,99 @@ function resolveParent(path) {
   return { node: current, extName: last, index: null };
 }
 
+function resolveDepParent(path) {
+  if (path.startsWith("@shared:")) {
+    const rest = path.slice(8);
+    const dot = rest.indexOf(".");
+    if (dot === -1) {
+      return { node: null, extName: null, index: null };
+    }
+    const sharedId = rest.slice(0, dot);
+    const suffix = rest.slice(dot + 1);
+    const node = ensureShared()[sharedId];
+    if (!node) {
+      return { node: null, extName: null, index: null };
+    }
+    return resolveParentFromNode(node, suffix);
+  }
+  return resolveParent(path);
+}
+
+function resolveParentFromNode(rootNode, suffix) {
+  const parts = suffix.split(".");
+  const last = parts.pop();
+  let current = rootNode;
+  for (const part of parts) {
+    const match = part.match(/^(.+)\[(\d+)\]$/);
+    if (match) {
+      const [, name, index] = match;
+      current = current.deps[name][Number(index)];
+    } else {
+      current = current.deps[part];
+    }
+  }
+  const listMatch = last.match(/^(.+)\[(\d+)\]$/);
+  if (listMatch) {
+    return {
+      node: current,
+      extName: listMatch[1],
+      index: Number(listMatch[2]),
+    };
+  }
+  return { node: current, extName: last, index: null };
+}
+
 function removeNode(path) {
-  const { node, extName, index } = resolveParent(path);
+  const { node, extName, index } = resolveDepParent(path);
+  if (!node) return;
   if (index == null) {
     delete node.deps[extName];
   } else {
     node.deps[extName].splice(index, 1);
     if (node.deps[extName].length === 0) delete node.deps[extName];
   }
-  renderGraph();
-  refreshPreview();
+  renderAll();
+}
+
+function removeRef(path, extName, index) {
+  const { node } = resolveDepParent(path);
+  if (!node) return;
+  if (index == null) {
+    delete node.deps[extName];
+  } else {
+    node.deps[extName].splice(index, 1);
+    if (node.deps[extName].length === 0) delete node.deps[extName];
+  }
+  renderAll();
+}
+
+function setPickerMode(mode) {
+  state.pickerMode = mode;
+  els.pickerModeInline.classList.toggle("active", mode === "inline");
+  els.pickerModeRef.classList.toggle("active", mode === "ref");
+  renderPicker(els.pickerFilter.value);
 }
 
 async function openPicker(parentNode, parentPath, extName, isList) {
   state.picker = { parentNode, parentPath, extName, isList };
+  state.pickerMode = "inline";
   els.pickerTitle.textContent = `为 ${parentNode.use}.${extName} 选择插件`;
   els.pickerFilter.value = "";
-  await renderPicker("");
+  const hasShared = Object.keys(ensureShared()).length > 0;
+  els.pickerMode.classList.toggle("hidden", !hasShared);
+  setPickerMode("inline");
   els.pickerDialog.showModal();
 }
 
 async function renderPicker(filter) {
+  if (state.pickerMode === "ref") {
+    await renderPickerRef(filter);
+    return;
+  }
   const { parentNode, extName } = state.picker;
-  const kinds = await api(`/api/compatible?parent=${encodeURIComponent(parentNode.use)}&ext=${encodeURIComponent(extName)}`);
+  const kinds = await api(
+    `/api/compatible?parent=${encodeURIComponent(parentNode.use)}&ext=${encodeURIComponent(extName)}`
+  );
   const q = filter.trim().toLowerCase();
   els.pickerList.innerHTML = "";
   for (const kind of kinds.kinds || []) {
@@ -296,10 +548,46 @@ async function renderPicker(filter) {
     const info = getDescribe(kind);
     li.innerHTML = `
       <div class="kind">${kind}</div>
-      <div class="meta">${info?.returnType || ""}</div>
+      <div class="meta">${info?.returnType || ""} · 新建内联</div>
     `;
     li.addEventListener("click", async () => {
       await attachPlugin(kind);
+      els.pickerDialog.close();
+    });
+    els.pickerList.appendChild(li);
+  }
+}
+
+async function renderPickerRef(filter) {
+  const { parentNode, extName } = state.picker;
+  const kinds = await api(
+    `/api/compatible?parent=${encodeURIComponent(parentNode.use)}&ext=${encodeURIComponent(extName)}`
+  );
+  const compatible = new Set(kinds.kinds || []);
+  const q = filter.trim().toLowerCase();
+  els.pickerList.innerHTML = "";
+
+  const entries = Object.entries(ensureShared())
+    .filter(([, node]) => compatible.has(node.use))
+    .filter(([id, node]) => !q || id.includes(q) || node.use.includes(q));
+
+  if (entries.length === 0) {
+    const li = document.createElement("li");
+    li.className = "picker-item";
+    li.innerHTML = `<div class="meta">没有类型匹配的共享实例，请先添加或使用「新建内联」。</div>`;
+    els.pickerList.appendChild(li);
+    return;
+  }
+
+  for (const [id, node] of entries) {
+    const li = document.createElement("li");
+    li.className = "picker-item";
+    li.innerHTML = `
+      <div class="kind">${id}</div>
+      <div class="meta">${node.use} · 引用共享 · ${countReferences(id)} 处引用</div>
+    `;
+    li.addEventListener("click", () => {
+      attachReference(id);
       els.pickerDialog.close();
     });
     els.pickerList.appendChild(li);
@@ -321,9 +609,21 @@ async function attachPlugin(kind) {
   } else {
     deps[extName] = child;
   }
-  renderGraph();
-  refreshPreview();
-  setStatus(`已添加 ${kind} 到 ${parentNode.use}.${extName}`, "ok");
+  renderAll();
+  setStatus(`已添加内联 ${kind} 到 ${parentNode.use}.${extName}`, "ok");
+}
+
+function attachReference(refId) {
+  const { parentNode, extName, isList } = state.picker;
+  const deps = ensureDeps(parentNode);
+  if (isList) {
+    if (!Array.isArray(deps[extName])) deps[extName] = [];
+    deps[extName].push(refId);
+  } else {
+    deps[extName] = refId;
+  }
+  renderAll();
+  setStatus(`已引用共享实例 ${refId} 到 ${parentNode.use}.${extName}`, "ok");
 }
 
 function normalizeDepsFromTemplate(deps) {
@@ -331,12 +631,14 @@ function normalizeDepsFromTemplate(deps) {
   const out = {};
   for (const [key, value] of Object.entries(deps)) {
     if (Array.isArray(value)) {
-      out[key] = value.map((item) => ({
-        use: "",
-        config: {},
-        deps: {},
-        ...(typeof item === "object" ? { use: item.use || "" } : {}),
-      })).filter((item) => item.use);
+      out[key] = value
+        .map((item) => ({
+          use: "",
+          config: {},
+          deps: {},
+          ...(typeof item === "object" ? { use: item.use || "" } : {}),
+        }))
+        .filter((item) => item.use);
     } else if (value && typeof value === "object") {
       if (value.use) {
         out[key] = { use: value.use, config: value.config || {}, deps: {} };
@@ -394,8 +696,7 @@ els.configForm.addEventListener("submit", (event) => {
       node.config[key] = input.value;
     }
   }
-  renderGraph();
-  refreshPreview();
+  renderAll();
   setStatus("config 已更新", "ok");
 });
 
@@ -461,13 +762,51 @@ document.getElementById("yamlForm").addEventListener("submit", async (event) => 
     els.rootId.value = doc.rootId;
     els.rootKind.value = doc.plugin.use;
     state.document.plugin = doc.plugin;
-    renderGraph();
-    refreshPreview();
+    state.document.shared = doc.shared || {};
+    renderAll();
     setStatus("导入成功", "ok");
   } catch (err) {
     setStatus(err.message, "err");
   }
 });
+
+document.getElementById("btnAddShared").addEventListener("click", () => {
+  els.sharedId.value = "";
+  if (state.catalog[0]) {
+    els.sharedKind.value = state.catalog[0].kind;
+  }
+  els.sharedDialog.showModal();
+});
+
+els.sharedForm.addEventListener("submit", async (event) => {
+  if (event.submitter?.id !== "sharedSave") return;
+  const id = els.sharedId.value.trim();
+  const kind = els.sharedKind.value;
+  const rootId = els.rootId.value.trim();
+  if (!id) {
+    setStatus("实例 ID 不能为空", "err");
+    return;
+  }
+  if (id === rootId) {
+    setStatus("共享实例 ID 不能与 Root ID 相同", "err");
+    return;
+  }
+  if (ensureShared()[id]) {
+    setStatus(`共享实例 ${id} 已存在`, "err");
+    return;
+  }
+  const tmpl = await loadTemplate(kind);
+  ensureShared()[id] = {
+    use: tmpl.use || kind,
+    config: tmpl.config || {},
+    deps: normalizeDepsFromTemplate(tmpl.deps),
+  };
+  renderAll();
+  setStatus(`已创建共享实例 ${id} (${kind})`, "ok");
+});
+
+els.pickerModeInline.addEventListener("click", () => setPickerMode("inline"));
+els.pickerModeRef.addEventListener("click", () => setPickerMode("ref"));
 
 els.rootId.addEventListener("change", refreshPreview);
 els.rootKind.addEventListener("change", () => newDocument(els.rootKind.value));
@@ -485,8 +824,7 @@ async function boot() {
   } else if (state.catalog[0]) {
     await newDocument(state.catalog[0].kind);
   } else {
-    renderGraph();
-    refreshPreview();
+    renderAll();
   }
 }
 

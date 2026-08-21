@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -33,8 +34,22 @@ func New(opts Options) (http.Handler, error) {
 	srv := &server{validateBuild: opts.ValidateBuild}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
-	mux.Handle("/", http.FileServer(http.FS(ui)))
+	mux.Handle("/", noCacheStatic(http.FileServer(http.FS(ui))))
 	return withLogging(mux), nil
+}
+
+func noCacheStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			path := r.URL.Path
+			if path == "/" || path == "/index.html" || strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				w.Header().Set("Pragma", "no-cache")
+				w.Header().Set("Expires", "0")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run 启动 HTTP 服务并在收到 SIGINT/SIGTERM 后优雅退出。

@@ -59,6 +59,51 @@ func TestCompatibleKinds(t *testing.T) {
 	}
 }
 
+func TestCompatibleKindsPrefersExactReturnType(t *testing.T) {
+	resetRegistry()
+	t.Cleanup(resetRegistry)
+
+	toolType := reflect.TypeOf((*Tool)(nil)).Elem()
+	stepType := reflect.TypeOf((*Step)(nil)).Elem()
+
+	if err := register("read-file", func(readFileCfg) (Tool, error) {
+		return &readFileStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := register("shell", func() (Tool, error) {
+		return &shellStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := register("openai", func(openaiCfg) (LLM, error) {
+		return &openaiStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := register("http-step", func() (Step, error) {
+		return stepStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := CompatibleKinds(toolType)
+	want := []string{"read-file", "shell", "http-step", "openai"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CompatibleKinds(Tool)=%v want %v", got, want)
+	}
+
+	got = CompatibleKinds(stepType)
+	wantStep := []string{"http-step", "openai", "read-file", "shell"}
+	if !reflect.DeepEqual(got, wantStep) {
+		t.Fatalf("CompatibleKinds(Step)=%v want %v", got, wantStep)
+	}
+}
+
+type Step interface {
+	Run() string
+}
+
 type openaiStub struct{}
 
 func (o *openaiStub) Model() string { return "" }
@@ -70,6 +115,10 @@ func (r *readFileStub) Name() string { return "" }
 type shellStub struct{}
 
 func (s *shellStub) Name() string { return "" }
+
+type stepStub struct{}
+
+func (s stepStub) Run() string { return "" }
 
 type openaiCfg struct {
 	Model string `json:"model"`

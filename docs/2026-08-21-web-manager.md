@@ -6,7 +6,7 @@
 
 ## 目标
 
-提供一个可嵌入宿主 binary 的 Web UI，用于查看已注册插件、浏览扩展点，并以**内联 deps** 方式可视化编辑 root 实例图，导出 YAML 配置。
+提供一个可嵌入宿主 binary 的 Web UI，用于查看已注册插件、浏览扩展点，可视化编辑 root 实例图（内联 deps + 顶层共享实例引用），导出 YAML 配置。
 
 ## 使用方式
 
@@ -49,9 +49,9 @@ http.ListenAndServe(":8080", handler)
 ## 约束
 
 1. manager 读取当前进程注册表，不支持运行时加载未编译插件。
-2. 第一版只支持**单个 top-level root id** 的内联配置，不支持顶层引用共享实例。
+2. 支持 **root 内联树 + 顶层共享实例 + deps 引用**；导出格式与 `build.Build` root 模式一致。
 3. Root 由 UI 输入/选择：`rootId` + root `kind`。
-4. 导出格式与 `build.Build` root 模式一致。
+4. 共享实例在 UI 独立区域维护，deps 可引用已有实例 id（字符串）或内联插件对象。
 
 ## 架构
 
@@ -63,7 +63,7 @@ flowchart LR
   MGR --> UI
   MGR --> API
   API --> PK["pluginkit\nListKinds / Describe"]
-  API --> DOC["Document\n内联树 ↔ YAML"]
+  API --> DOC["Document\n内联树 + 共享实例 ↔ YAML"]
   API --> BUILD["build.ValidatePlan"]
   REG --> PK
 ```
@@ -77,34 +77,71 @@ flowchart LR
 | GET | `/api/compatible?parent=&ext=` | 扩展点候选插件 |
 | POST | `/api/template/{kind}` | 返回 `Describe().Template()` |
 | POST | `/api/export` | Document → YAML |
-| POST | `/api/import` | YAML → Document（仅单 root 内联） |
+| POST | `/api/import` | YAML → Document（自动识别 root 与共享实例） |
 | POST | `/api/validate` | 结构 + ValidatePlan + 可选 ValidateBuild |
 
 Document JSON：
 
 ```json
 {
-  "rootId": "agent",
+  "rootId": "workflow",
   "plugin": {
-    "use": "agent",
+    "use": "workflow",
     "config": {},
     "deps": {
-      "llm": { "use": "openai", "config": { "model": "gpt-5.5" } },
-      "tools": [
-        { "use": "read-file", "config": { "root": "." } },
-        { "use": "shell" }
-      ]
+      "steps": ["fetch", { "use": "save-step", "deps": { "store": "store" } }]
     }
+  },
+  "shared": {
+    "fetch": { "use": "http-step", "config": {}, "deps": {} },
+    "store": { "use": "sqlite-store", "config": { "path": "/tmp/db" }, "deps": {} }
   }
 }
+```
+
+导出 YAML 示例：
+
+```yaml
+workflow:
+  use: workflow
+  deps:
+    steps:
+      - fetch
+      - use: save-step
+        deps:
+          store: store
+fetch:
+  use: http-step
+store:
+  use: sqlite-store
+  config:
+    path: /tmp/db
 ```
 
 ## UI 交互
 
 - 顶部：Root ID、Root Kind、新建 / 校验 / 导入 / 导出
-- 中间：树形实例图；扩展点显示 `+`，点击列出 `CompatibleKinds`
+- **共享实例区**：添加顶层共享实例（实例 id + kind），可编辑 config 与 deps；被引用时显示引用计数，有引用时不可删除
+- **Root 实例图**：树形内联 deps；扩展点 `+` 可选择「新建内联」或「引用共享」
+- 引用节点显示 `→ instance-id`，可跳转至共享实例或解除引用
 - 双击节点或点击 `config`：编辑插件 config
 - 右侧：YAML 预览（随编辑更新）
+
+```mermaid
+flowchart TB
+  subgraph shared [共享实例区]
+    S1["store · sqlite-store"]
+    S2["fetch · http-step"]
+  end
+  subgraph root [Root 实例图]
+    W["workflow"]
+    W --> R1["→ fetch"]
+    W --> SAVE["save-step"]
+    SAVE --> R2["→ store"]
+  end
+  R1 -.-> S2
+  R2 -.-> S1
+```
 
 ## Demo 启动
 
@@ -116,5 +153,5 @@ go run ./examples/manager
 ## 后续
 
 - 画布拖拽布局（React Flow）
-- 顶层共享实例（引用模式）
+- 内联实例一键提升为共享实例
 - 由宿主声明多个 root 目标类型

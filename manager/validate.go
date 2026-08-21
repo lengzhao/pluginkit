@@ -30,7 +30,7 @@ func validateDocument(ctx context.Context, doc Document, validateBuild func(cont
 	return nil
 }
 
-func validateTree(node PluginNode) error {
+func validateTree(node PluginNode, resolve instanceResolver) error {
 	desc, ok := pluginkit.Describe(node.Use)
 	if !ok {
 		return fmt.Errorf("unknown plugin kind %q", node.Use)
@@ -50,12 +50,28 @@ func validateTree(node PluginNode) error {
 				return fmt.Errorf("plugin %q deps.%s: %w", node.Use, name, err)
 			}
 			for i, item := range items {
-				if err := checkKindCompatible(ext.Type, item.Use); err != nil {
+				if refID, ok := item.(string); ok {
+					if err := validateRef(ext.Type, refID, resolve); err != nil {
+						return fmt.Errorf("plugin %q deps.%s[%d]: %w", node.Use, name, i, err)
+					}
+					continue
+				}
+				child, err := decodeDepNode(item)
+				if err != nil {
 					return fmt.Errorf("plugin %q deps.%s[%d]: %w", node.Use, name, i, err)
 				}
-				if err := validateTree(item); err != nil {
+				if err := checkKindCompatible(ext.Type, child.Use); err != nil {
+					return fmt.Errorf("plugin %q deps.%s[%d]: %w", node.Use, name, i, err)
+				}
+				if err := validateTree(child, resolve); err != nil {
 					return err
 				}
+			}
+			continue
+		}
+		if refID, ok := raw.(string); ok {
+			if err := validateRef(ext.Type, refID, resolve); err != nil {
+				return fmt.Errorf("plugin %q deps.%s: %w", node.Use, name, err)
 			}
 			continue
 		}
@@ -66,7 +82,7 @@ func validateTree(node PluginNode) error {
 		if err := checkKindCompatible(ext.Type, child.Use); err != nil {
 			return fmt.Errorf("plugin %q deps.%s: %w", node.Use, name, err)
 		}
-		if err := validateTree(child); err != nil {
+		if err := validateTree(child, resolve); err != nil {
 			return err
 		}
 	}
@@ -79,6 +95,14 @@ func validateTree(node PluginNode) error {
 		}
 	}
 	return nil
+}
+
+func validateRef(want reflect.Type, refID string, resolve instanceResolver) error {
+	target, ok := resolve(refID)
+	if !ok {
+		return fmt.Errorf("unknown instance reference %q", refID)
+	}
+	return checkKindCompatible(want, target.Use)
 }
 
 func checkKindCompatible(want reflect.Type, kind string) error {
