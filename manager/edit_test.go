@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,6 +45,10 @@ func newWorkflow(_ struct{}, deps struct {
 	return stubWF{}, nil
 }
 
+type blob struct{}
+
+func newBlob() (blob, error) { return blob{}, nil }
+
 type stubAgent struct{}
 type stubLLM struct{ model string }
 type stubTool struct{}
@@ -72,6 +77,7 @@ func ensureTestPlugins(t *testing.T) {
 		pluginkit.Register("http-step", newHTTP)
 		pluginkit.Register("save-step", newSave)
 		pluginkit.Register("sequential-workflow", newWorkflow)
+		pluginkit.Register("blob", newBlob)
 	})
 }
 
@@ -269,4 +275,148 @@ func assertSlot(t *testing.T, got resolved, parent *PluginNode, ext string, inde
 		t.Fatalf("got parent=%p ext=%q index=%d, want parent=%p ext=%q index=%d (resolved=%#v)",
 			got.Parent, got.Ext, got.Index, parent, ext, index, got)
 	}
+}
+
+func TestStructureDiagnosticsMissingRequiredDep(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{Use: "agent", Deps: map[string]any{}},
+	}
+	diags := structureDiagnostics(doc)
+	if !hasDiag(diags, "root.deps.llm", "missing_dep") {
+		t.Fatalf("diags=%#v", diags)
+	}
+	if !hasDiag(diags, "root.deps.tools", "missing_dep") {
+		t.Fatalf("expected missing tools slot, diags=%#v", diags)
+	}
+}
+
+func TestStructureDiagnosticsUnknownRef(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm":   "missing",
+				"tools": []any{},
+			},
+		},
+	}
+	diags := structureDiagnostics(doc)
+	if !hasDiag(diags, "root.deps.llm", "unknown_ref") {
+		t.Fatalf("diags=%#v", diags)
+	}
+}
+
+func TestStructureDiagnosticsUnknownKind(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{Use: "no-such"},
+	}
+	diags := structureDiagnostics(doc)
+	if !hasDiag(diags, "root", "unknown_kind") {
+		t.Fatalf("diags=%#v", diags)
+	}
+}
+
+func TestStructureDiagnosticsIncompatible(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm":   PluginNode{Use: "blob"},
+				"tools": []any{},
+			},
+		},
+	}
+	diags := structureDiagnostics(doc)
+	if !hasDiag(diags, "root.deps.llm", "incompatible") {
+		t.Fatalf("diags=%#v", diags)
+	}
+}
+
+func TestStructureDiagnosticsOptionalHookUnset(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm":   PluginNode{Use: "openai"},
+				"tools": []any{},
+			},
+		},
+	}
+	diags := structureDiagnostics(doc)
+	if hasDiag(diags, "root.deps.hook", "missing_dep") {
+		t.Fatalf("optional hook must not be missing_dep, diags=%#v", diags)
+	}
+	if hasDiag(diags, "root.deps.tools", "missing_dep") {
+		t.Fatalf("empty tools slice must not be missing_dep, diags=%#v", diags)
+	}
+}
+
+func TestValidateFailsOnStructureErrors(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{Use: "agent", Deps: map[string]any{}},
+	}
+	err := doc.Validate()
+	if err == nil {
+		t.Fatal("expected Validate to fail on error-level structure diagnostics")
+	}
+	if !strings.Contains(err.Error(), "root.deps.llm") {
+		t.Fatalf("Validate should surface structure diagnostic path, err=%v", err)
+	}
+}
+
+func TestCollectDiagnosticsIncludesPlan(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{Use: "no-such"},
+	}
+	diags := collectDiagnostics(doc)
+	if !hasDiag(diags, "root", "unknown_kind") {
+		t.Fatalf("expected structure unknown_kind, diags=%#v", diags)
+	}
+	if !hasDiag(diags, "root", "plan") {
+		t.Fatalf("expected plan diagnostic even after structure failure, diags=%#v", diags)
+	}
+}
+
+func TestPlanDiagnosticsMapsSharedID(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm":   "llm-shared",
+				"tools": []any{},
+			},
+		},
+		Shared: map[string]PluginNode{
+			"llm-shared": {Use: "no-such"},
+		},
+	}
+	diags := planDiagnostics(doc)
+	if !hasDiag(diags, "shared.llm-shared", "plan") {
+		t.Fatalf("expected plan path mapped from instance id, diags=%#v", diags)
+	}
+}
+
+func hasDiag(diags []Diagnostic, path, code string) bool {
+	for _, d := range diags {
+		if d.Path == path && d.Code == code {
+			return true
+		}
+	}
+	return false
 }

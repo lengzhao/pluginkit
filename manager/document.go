@@ -30,20 +30,9 @@ func (d Document) Validate() error {
 	if d.Plugin.Use == "" {
 		return fmt.Errorf("plugin.use is required")
 	}
-	if d.Shared == nil {
-		d.Shared = map[string]PluginNode{}
-	}
-	if _, ok := d.Shared[d.RootID]; ok {
-		return fmt.Errorf("shared instance id %q conflicts with rootId", d.RootID)
-	}
-	resolver := d.instanceResolver()
-	if err := validateTree(d.Plugin, resolver); err != nil {
-		return fmt.Errorf("%s: %w", d.RootID, err)
-	}
-	ids := sortedKeys(d.Shared)
-	for _, id := range ids {
-		if err := validateTree(d.Shared[id], resolver); err != nil {
-			return fmt.Errorf("%s: %w", id, err)
+	for _, diag := range structureDiagnostics(d) {
+		if diag.Severity == "error" {
+			return fmt.Errorf("%s: %s", diag.Path, diag.Message)
 		}
 	}
 	return nil
