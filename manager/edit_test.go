@@ -412,6 +412,60 @@ func TestPlanDiagnosticsMapsSharedID(t *testing.T) {
 	}
 }
 
+func TestPlanDiagnosticsMapsInlineBuildID(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm":   PluginNode{Use: "no-such"},
+				"tools": []any{},
+			},
+		},
+	}
+	diags := planDiagnostics(doc)
+	if !hasDiag(diags, "root.deps.llm", "plan") {
+		t.Fatalf("expected inline build id mapped to root.deps.llm, diags=%#v", diags)
+	}
+	for _, d := range diags {
+		if d.Path == "agent.llm" || d.Path == "agent.deps.llm" {
+			t.Fatalf("untranslated build instance id %q, diags=%#v", d.Path, diags)
+		}
+	}
+}
+
+func TestPlanErrorPathTranslatesBuildIDs(t *testing.T) {
+	doc := Document{
+		RootID: "agent",
+		Shared: map[string]PluginNode{
+			"save": {Use: "save-step"},
+		},
+	}
+	tests := []struct {
+		id   string
+		path string
+		ok   bool
+	}{
+		{"", "root", false},
+		{"agent", "root", true},
+		{"save", "shared.save", true},
+		{"agent.llm", "root.deps.llm", true},
+		{"agent.llm.hook", "root.deps.llm.deps.hook", true},
+		{"agent.tools[0]", "root.deps.tools[0]", true},
+		{"agent.tools[0].store", "root.deps.tools[0].deps.store", true},
+		{"save.store", "shared.save.deps.store", true},
+		{"orphan.x", "root", false},
+		{"agent.", "root", false},
+	}
+	for _, tt := range tests {
+		got, ok := planErrorPath(doc, tt.id)
+		if got != tt.path || ok != tt.ok {
+			t.Fatalf("id=%q got (%q, %v) want (%q, %v)", tt.id, got, ok, tt.path, tt.ok)
+		}
+	}
+}
+
 func hasDiag(diags []Diagnostic, path, code string) bool {
 	for _, d := range diags {
 		if d.Path == path && d.Code == code {

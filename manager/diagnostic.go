@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/lengzhao/pluginkit"
 	"github.com/lengzhao/pluginkit/build"
@@ -66,7 +68,70 @@ func planErrorPath(doc Document, id string) (string, bool) {
 	if _, ok := doc.Shared[id]; ok {
 		return "shared." + id, true
 	}
-	return id, true
+	if doc.RootID != "" && strings.HasPrefix(id, doc.RootID+".") {
+		translated, ok := translateBuildSuffix(strings.TrimPrefix(id, doc.RootID+"."))
+		if !ok {
+			return "root", false
+		}
+		return "root." + translated, true
+	}
+	best := ""
+	for sharedID := range doc.Shared {
+		if sharedID == "" || !strings.HasPrefix(id, sharedID+".") {
+			continue
+		}
+		if len(sharedID) > len(best) {
+			best = sharedID
+		}
+	}
+	if best != "" {
+		translated, ok := translateBuildSuffix(strings.TrimPrefix(id, best+"."))
+		if !ok {
+			return "root", false
+		}
+		return "shared." + best + "." + translated, true
+	}
+	return "root", false
+}
+
+// translateBuildSuffix 把 build 内联后缀 a[i].b 转成 deps.a[i].deps.b。
+func translateBuildSuffix(suffix string) (string, bool) {
+	if suffix == "" {
+		return "", false
+	}
+	var parts []string
+	rest := suffix
+	for rest != "" {
+		name, index, leftover, err := parseNameIndex(rest)
+		if err != nil || name == "" {
+			return "", false
+		}
+		if index >= 0 {
+			parts = append(parts, fmt.Sprintf("%s[%d]", name, index))
+		} else {
+			parts = append(parts, name)
+		}
+		if leftover == "" {
+			break
+		}
+		if !strings.HasPrefix(leftover, ".") {
+			return "", false
+		}
+		rest = leftover[1:]
+		if rest == "" {
+			return "", false
+		}
+	}
+	return "deps." + strings.Join(parts, ".deps."), true
+}
+
+func sortedDepNames(deps map[string]any) []string {
+	names := make([]string, 0, len(deps))
+	for name := range deps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func nodeStructureDiags(path string, node PluginNode, resolve instanceResolver) []Diagnostic {
@@ -82,7 +147,8 @@ func nodeStructureDiags(path string, node PluginNode, resolve instanceResolver) 
 	}
 
 	var diags []Diagnostic
-	for name, raw := range node.Deps {
+	for _, name := range sortedDepNames(node.Deps) {
+		raw := node.Deps[name]
 		slotPath := path + ".deps." + name
 		ext, ok := extByName[name]
 		if !ok {
