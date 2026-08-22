@@ -474,3 +474,149 @@ func hasDiag(diags []Diagnostic, path, code string) bool {
 	}
 	return false
 }
+
+func TestProjectViewEmptyAgentSlots(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{RootID: "agent", Plugin: PluginNode{Use: "agent"}}
+	view := projectView(doc)
+	if view.Root == nil || view.Root.Kind != "agent" || view.Root.Role != "inline" {
+		t.Fatalf("root=%#v", view.Root)
+	}
+	llm := slotByName(view.Root, "llm")
+	if llm == nil || llm.Status != "empty" || !contains(llm.Kinds, "openai") {
+		t.Fatalf("llm slot=%#v", llm)
+	}
+	if len(llm.Items) != 0 {
+		t.Fatalf("empty slot should have no items")
+	}
+}
+
+func TestProjectViewRefItem(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "workflow",
+		Plugin: PluginNode{
+			Use:  "sequential-workflow",
+			Deps: map[string]any{"steps": []any{"fetch"}},
+		},
+		Shared: map[string]PluginNode{"fetch": {Use: "http-step"}},
+	}
+	view := projectView(doc)
+	steps := slotByName(view.Root, "steps")
+	if steps == nil || len(steps.Items) != 1 || steps.Items[0].Role != "ref" || steps.Items[0].RefID != "fetch" {
+		t.Fatalf("steps=%#v", steps)
+	}
+	if len(view.Shared) != 1 || view.Shared[0].Path != "shared.fetch" {
+		t.Fatalf("shared=%#v", view.Shared)
+	}
+}
+
+func TestProjectViewInlineConfigAndSlotRefs(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"llm": PluginNode{
+					Use:    "openai",
+					Config: map[string]any{"model": "m"},
+				},
+			},
+		},
+		Shared: map[string]PluginNode{
+			"gpt": {Use: "openai", Config: map[string]any{"model": "x"}},
+		},
+	}
+	view := projectView(doc)
+	if view.Root == nil || view.Root.Path != "root" {
+		t.Fatalf("root path=%#v", view.Root)
+	}
+	llm := slotByName(view.Root, "llm")
+	if llm == nil || llm.Status != "filled" || llm.Path != "root.deps.llm" {
+		t.Fatalf("llm=%#v", llm)
+	}
+	if len(llm.Items) != 1 || llm.Items[0].Role != "inline" || llm.Items[0].Kind != "openai" || llm.Items[0].Path != "root.deps.llm" {
+		t.Fatalf("llm items=%#v", llm.Items)
+	}
+	if len(llm.Items[0].Config) == 0 || llm.Items[0].Config[0].Name != "model" || llm.Items[0].Config[0].Value != "m" {
+		t.Fatalf("config=%#v", llm.Items[0].Config)
+	}
+	if !hasRef(llm.Refs, "gpt", "openai") {
+		t.Fatalf("expected gpt ref candidate, refs=%#v", llm.Refs)
+	}
+	tools := slotByName(view.Root, "tools")
+	if tools == nil || tools.Status != "empty" || tools.Path != "root.deps.tools" {
+		t.Fatalf("tools=%#v", tools)
+	}
+	hook := slotByName(view.Root, "hook")
+	if hook == nil || hook.Status != "empty" {
+		t.Fatalf("optional hook should still appear as empty slot, hook=%#v", hook)
+	}
+}
+
+func TestProjectViewSharedHasSlots(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "workflow",
+		Plugin: PluginNode{
+			Use:  "sequential-workflow",
+			Deps: map[string]any{"steps": []any{"save"}},
+		},
+		Shared: map[string]PluginNode{
+			"save": {Use: "save-step"},
+		},
+	}
+	view := projectView(doc)
+	if len(view.Shared) != 1 || view.Shared[0].Role != "shared" || view.Shared[0].Kind != "save-step" {
+		t.Fatalf("shared=%#v", view.Shared)
+	}
+	store := slotByName(&view.Shared[0], "store")
+	if store == nil || store.Status != "empty" || store.Path != "shared.save.deps.store" {
+		t.Fatalf("store slot=%#v", store)
+	}
+	steps := slotByName(view.Root, "steps")
+	if steps == nil || len(steps.Items) != 1 {
+		t.Fatalf("steps=%#v", steps)
+	}
+	item := steps.Items[0]
+	if item.Role != "ref" || item.Kind != "save-step" || item.RefID != "save" || item.RefCount != 1 {
+		t.Fatalf("ref item=%#v", item)
+	}
+	if item.Path != "root.deps.steps[0]" {
+		t.Fatalf("ref path=%q", item.Path)
+	}
+	if len(item.Slots) != 0 {
+		t.Fatalf("ref must not expand subtree, slots=%#v", item.Slots)
+	}
+}
+
+func slotByName(node *ViewNode, name string) *ViewSlot {
+	if node == nil {
+		return nil
+	}
+	for i := range node.Slots {
+		if node.Slots[i].Name == name {
+			return &node.Slots[i]
+		}
+	}
+	return nil
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRef(refs []RefCandidate, id, kind string) bool {
+	for _, ref := range refs {
+		if ref.ID == id && ref.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
