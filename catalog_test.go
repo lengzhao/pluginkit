@@ -25,6 +25,38 @@ func TestListKinds(t *testing.T) {
 	}
 }
 
+func TestKindCandidatesExactFlag(t *testing.T) {
+	resetRegistry()
+	t.Cleanup(resetRegistry)
+
+	toolType := reflect.TypeOf((*Tool)(nil)).Elem()
+
+	if err := register("read-file", func(readFileCfg) (Tool, error) {
+		return &readFileStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := register("http-step", func() (Step, error) {
+		return stepStub{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := KindCandidates(toolType)
+	if len(got) != 2 {
+		t.Fatalf("KindCandidates(Tool)=%#v want 2 items", got)
+	}
+	if got[0].Kind != "read-file" || !got[0].Exact {
+		t.Fatalf("first candidate=%#v want exact read-file", got[0])
+	}
+	if got[1].Kind != "http-step" || got[1].Exact {
+		t.Fatalf("second candidate=%#v want iface http-step", got[1])
+	}
+	if got[0].ReturnType == "" || got[1].ReturnType == "" {
+		t.Fatalf("return type should be set: %#v", got)
+	}
+}
+
 func TestCompatibleKinds(t *testing.T) {
 	resetRegistry()
 	t.Cleanup(resetRegistry)

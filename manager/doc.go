@@ -8,9 +8,9 @@
 //	    manager.Run(manager.Options{Addr: ":8080"})
 //	}
 //
-// 工作台通过 POST /api/edit 应用编辑命令（填槽、改 config、提取共享、导入 YAML），
-// 返回 document + view + diagnostics + yaml。POST /api/build 在 structure/plan 通过后
+// 工作台通过 GET /api/bootstrap 获取 catalog 与可选 InitialYAML；
+// POST /api/load 或 POST /api/edit（importYAML）加载 YAML；
+// POST /api/edit 应用其他编辑命令，返回 document + view + diagnostics + yaml。
+// Options.OnChange / OnBuild 在 edit、load、build 成功后回调 DocumentEvent。
 // 可选执行宿主 ValidateBuild 做试装配。
-//
-// manager 读取当前进程注册表，不支持运行时加载未编译插件。
 package manager

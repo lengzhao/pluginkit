@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 
@@ -15,19 +14,6 @@ func validatePlan(doc Document) error {
 		return fmt.Errorf("unknown plugin kind %q", doc.Plugin.Use)
 	}
 	return build.ValidatePlan(doc.ToGraph(), doc.RootID, spec.ReturnType)
-}
-
-func validateDocument(ctx context.Context, doc Document, validateBuild func(context.Context, Document) error) error {
-	if err := doc.Validate(); err != nil {
-		return err
-	}
-	if err := validatePlan(doc); err != nil {
-		return err
-	}
-	if validateBuild != nil {
-		return validateBuild(ctx, doc)
-	}
-	return nil
 }
 
 func compatibleReturnType(want, ret reflect.Type) bool {

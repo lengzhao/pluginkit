@@ -483,7 +483,7 @@ func TestProjectViewEmptyAgentSlots(t *testing.T) {
 		t.Fatalf("root=%#v", view.Root)
 	}
 	llm := slotByName(view.Root, "llm")
-	if llm == nil || llm.Status != "empty" || !contains(llm.Kinds, "openai") {
+	if llm == nil || llm.Status != "empty" || !containsKind(llm.Kinds, "openai") {
 		t.Fatalf("llm slot=%#v", llm)
 	}
 	if len(llm.Items) != 0 {
@@ -603,9 +603,9 @@ func slotByName(node *ViewNode, name string) *ViewSlot {
 	return nil
 }
 
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
+func containsKind(candidates []KindCandidate, want string) bool {
+	for _, c := range candidates {
+		if c.Kind == want {
 			return true
 		}
 	}
@@ -632,6 +632,65 @@ func TestApplyNewRootHasEmptyDeps(t *testing.T) {
 	}
 	if len(out.Plugin.Deps) != 0 {
 		t.Fatalf("deps must be empty, got %#v", out.Plugin.Deps)
+	}
+}
+
+func TestApplyAttachListDep(t *testing.T) {
+	ensureTestPlugins(t)
+	doc, err := apply(Document{}, Operation{Type: "newRoot", Kind: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = apply(doc, Operation{Type: "attach", Path: "root.deps.tools", Kind: "read-file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, ok := doc.Plugin.Deps["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools must be a one-item array, got %#v", doc.Plugin.Deps["tools"])
+	}
+	node, err := decodeDepNode(tools[0])
+	if err != nil || node.Use != "read-file" {
+		t.Fatalf("tools[0]=%#v err=%v", tools[0], err)
+	}
+	diags := structureDiagnostics(doc)
+	if hasDiag(diags, "root.deps.tools", "invalid_dep") {
+		t.Fatalf("unexpected structure error, diags=%#v", diags)
+	}
+
+	doc, err = apply(doc, Operation{Type: "attach", Path: "root.deps.tools", Kind: "shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, ok = doc.Plugin.Deps["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("tools must have two items, got %#v", doc.Plugin.Deps["tools"])
+	}
+}
+
+func TestApplyAttachRepairsCorruptListDep(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{
+			Use: "agent",
+			Deps: map[string]any{
+				"tools": PluginNode{Use: "read-file"},
+			},
+		},
+		Shared: map[string]PluginNode{},
+	}
+	doc, err := apply(doc, Operation{Type: "attach", Path: "root.deps.tools", Kind: "shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, ok := doc.Plugin.Deps["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("tools must be repaired to a two-item array, got %#v", doc.Plugin.Deps["tools"])
+	}
+	diags := structureDiagnostics(doc)
+	if hasDiag(diags, "root.deps.tools", "invalid_dep") {
+		t.Fatalf("unexpected structure error, diags=%#v", diags)
 	}
 }
 

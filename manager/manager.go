@@ -20,9 +20,15 @@ var uiFS embed.FS
 type Options struct {
 	// Addr 监听地址，空值时使用 :8080。
 	Addr string
+	// InitialYAML 可选的初始 YAML。设置后 UI 启动时直接加载该文档，而非空白新建。
+	InitialYAML string
 	// ValidateBuild 在结构校验与 ValidatePlan 通过后可选执行完整 build。
 	// 宿主可在此调用 build.Build[T] 做更严格的校验。
 	ValidateBuild func(ctx context.Context, doc Document) error
+	// OnChange 在 edit / load 成功后调用，供宿主同步 YAML 或继续编排。
+	OnChange func(ctx context.Context, evt DocumentEvent) error
+	// OnBuild 在试装配完成后调用（无论是否通过）。
+	OnBuild func(ctx context.Context, evt DocumentEvent) error
 }
 
 // New 返回包含 UI 与 /api/* 的 http.Handler。
@@ -31,7 +37,12 @@ func New(opts Options) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv := &server{validateBuild: opts.ValidateBuild}
+	srv := &server{
+		validateBuild: opts.ValidateBuild,
+		initialYAML:   opts.InitialYAML,
+		onChange:      opts.OnChange,
+		onBuild:       opts.OnBuild,
+	}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 	mux.Handle("/", noCacheStatic(http.FileServer(http.FS(ui))))

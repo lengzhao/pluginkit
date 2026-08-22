@@ -13,6 +13,9 @@ import (
 
 type server struct {
 	validateBuild func(ctx context.Context, doc Document) error
+	initialYAML   string
+	onChange      func(ctx context.Context, evt DocumentEvent) error
+	onBuild       func(ctx context.Context, evt DocumentEvent) error
 }
 
 type fieldInfo struct {
@@ -33,6 +36,18 @@ type catalogResponse struct {
 	Kinds []kindInfo `json:"kinds"`
 }
 
+type bootstrapResponse struct {
+	Kinds       []kindInfo   `json:"kinds"`
+	Document    *Document    `json:"document,omitempty"`
+	View        *View        `json:"view,omitempty"`
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
+	YAML        string       `json:"yaml,omitempty"`
+}
+
+type loadRequest struct {
+	YAML string `json:"yaml"`
+}
+
 type editRequest struct {
 	Document Document  `json:"document"`
 	Op       Operation `json:"op"`
@@ -47,11 +62,13 @@ type editResponse struct {
 
 func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
+	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
+	mux.HandleFunc("POST /api/load", s.handleLoad)
 	mux.HandleFunc("POST /api/edit", s.handleEdit)
 	mux.HandleFunc("POST /api/build", s.handleBuild)
 }
 
-func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
+func (s *server) listKinds() []kindInfo {
 	var kinds []kindInfo
 	for _, kind := range pluginkit.ListKinds() {
 		info, ok := describeKind(kind)
@@ -60,7 +77,53 @@ func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
 		}
 		kinds = append(kinds, info)
 	}
-	writeJSON(w, http.StatusOK, catalogResponse{Kinds: kinds})
+	return kinds
+}
+
+func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, catalogResponse{Kinds: s.listKinds()})
+}
+
+func (s *server) handleBootstrap(w http.ResponseWriter, _ *http.Request) {
+	resp := bootstrapResponse{Kinds: s.listKinds()}
+	if s.initialYAML == "" {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	doc, err := FromYAML([]byte(s.initialYAML))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	loaded, err := buildEditResponse(doc, collectDiagnostics(doc))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resp.Document = &loaded.Document
+	resp.View = &loaded.View
+	resp.Diagnostics = loaded.Diagnostics
+	resp.YAML = loaded.YAML
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *server) handleLoad(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req loadRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	doc, err := apply(Document{}, Operation{Type: "importYAML", YAML: req.YAML})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.writeEditResponse(w, r, http.StatusOK, doc, ChangeLoad, "importYAML")
 }
 
 func (s *server) handleEdit(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +137,7 @@ func (s *server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeEditResponse(w, http.StatusOK, doc)
+	s.writeEditResponse(w, r, http.StatusOK, doc, ChangeEdit, req.Op.Type)
 }
 
 func (s *server) handleBuild(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +159,7 @@ func (s *server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+	s.notifyChange(r.Context(), ChangeBuild, "", resp)
 }
 
 func readEditRequest(r *http.Request) (editRequest, error) {
@@ -110,7 +174,7 @@ func readEditRequest(r *http.Request) (editRequest, error) {
 	return req, nil
 }
 
-func writeEditResponse(w http.ResponseWriter, status int, doc Document) {
+func (s *server) writeEditResponse(w http.ResponseWriter, r *http.Request, status int, doc Document, reason ChangeReason, op string) {
 	diags := collectDiagnostics(doc)
 	resp, err := buildEditResponse(doc, diags)
 	if err != nil {
@@ -118,6 +182,9 @@ func writeEditResponse(w http.ResponseWriter, status int, doc Document) {
 		return
 	}
 	writeJSON(w, status, resp)
+	if r != nil {
+		s.notifyChange(r.Context(), reason, op, resp)
+	}
 }
 
 func buildEditResponse(doc Document, diags []Diagnostic) (editResponse, error) {

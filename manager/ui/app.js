@@ -1,11 +1,13 @@
 const state = {
   catalog: [],
+  catalogByKind: {},
   document: { rootId: "", plugin: { use: "" }, shared: {} },
   view: { root: null, shared: [] },
   diagnostics: [],
   yaml: "",
   selectedPath: "root",
   buildDiagnostics: null,
+  allowIfaceMatch: false,
 };
 
 const els = {
@@ -18,6 +20,8 @@ const els = {
   importDialog: document.getElementById("importDialog"),
   importForm: document.getElementById("importForm"),
   yamlInput: document.getElementById("yamlInput"),
+  importFile: document.getElementById("importFile"),
+  toast: document.getElementById("toast"),
 };
 
 async function api(path, options = {}) {
@@ -48,11 +52,7 @@ function hasError(path) {
   return diagsForPath(path).some((d) => d.severity === "error");
 }
 
-async function edit(op) {
-  const data = await api("/api/edit", {
-    method: "POST",
-    body: JSON.stringify({ document: state.document, op }),
-  });
+async function applyEditResponse(data) {
   state.document = data.document;
   state.view = data.view;
   state.diagnostics = data.diagnostics || [];
@@ -62,23 +62,164 @@ async function edit(op) {
   if (state.document.plugin?.use) {
     els.rootKind.value = state.document.plugin.use;
   }
-  render();
+}
+
+function emitHostEvent(reason, data, operation = "") {
+  const evt = {
+    reason,
+    operation,
+    document: data.document,
+    yaml: data.yaml,
+    diagnostics: data.diagnostics || [],
+  };
+  if (reason === "build") {
+    window.pluginkitManager.onBuild?.(evt);
+  } else {
+    window.pluginkitManager.onChange?.(evt);
+  }
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: "pluginkit:document", ...evt }, "*");
+  }
+}
+
+async function edit(op) {
+  const data = await api("/api/edit", {
+    method: "POST",
+    body: JSON.stringify({ document: state.document, op }),
+  });
+  await applyEditResponse(data);
+  emitHostEvent("edit", data, op.type);
+  // setConfig 时保留检查器表单，避免输入过程中重建 DOM 导致光标丢失
+  const skipInspector = op.type === "setConfig";
+  render({ skipInspector });
+  if (skipInspector) {
+    refreshInspectorDiagnostics();
+  }
 }
 
 async function runBuild() {
-  const data = await api("/api/build", {
-    method: "POST",
-    body: JSON.stringify({ document: state.document }),
-  });
-  state.buildDiagnostics = data.diagnostics || [];
-  render();
+  const btn = document.getElementById("btnBuild");
+  btn.disabled = true;
+  btn.textContent = "装配中…";
+  try {
+    const data = await api("/api/build", {
+      method: "POST",
+      body: JSON.stringify({ document: state.document }),
+    });
+    state.buildDiagnostics = data.diagnostics || [];
+    render();
+    emitHostEvent("build", data);
+    const n = errorCount();
+    if (n === 0) {
+      showToast("试装配成功", "ok");
+    } else {
+      showToast(`试装配发现 ${n} 个问题`, "warn");
+      const first = activeDiagnostics().find((d) => d.severity === "error");
+      if (first) {
+        state.selectedPath = first.path;
+        render();
+      }
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "试装配";
+  }
 }
 
-function render() {
+let toastTimer;
+function showToast(message, tone = "info") {
+  const el = els.toast;
+  el.textContent = message;
+  el.className = `toast toast-${tone}`;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, 2800);
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // fall through to execCommand
+    }
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
+function exportFileName() {
+  const id = (state.document.rootId || "config").trim();
+  return `${id || "config"}.yaml`;
+}
+
+function downloadYAML(yaml = state.yaml, filename = exportFileName()) {
+  const blob = new Blob([yaml], { type: "text/yaml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function render(options = {}) {
   renderIssueCount();
   renderTree();
-  renderInspector();
+  if (!options.skipInspector) {
+    renderInspector();
+  }
   els.yamlPreview.textContent = state.yaml;
+}
+
+function getInspectorFocusState() {
+  const body = els.inspectorBody;
+  const active = document.activeElement;
+  if (!active || !body.contains(active) || active.tagName !== "INPUT") {
+    return null;
+  }
+  const field = active.dataset.field;
+  if (!field) return null;
+  return {
+    field,
+    selectionStart: active.selectionStart,
+    selectionEnd: active.selectionEnd,
+  };
+}
+
+function restoreInspectorFocus(focus) {
+  if (!focus) return;
+  const input = els.inspectorBody.querySelector(
+    `input[data-field="${CSS.escape(focus.field)}"]`
+  );
+  if (!input) return;
+  input.focus();
+  if (focus.selectionStart != null && focus.selectionEnd != null) {
+    try {
+      input.setSelectionRange(focus.selectionStart, focus.selectionEnd);
+    } catch (_) {
+      // 部分 input 类型不支持 selection
+    }
+  }
+}
+
+function refreshInspectorDiagnostics() {
+  const body = els.inspectorBody;
+  body.querySelector(".diag-section")?.remove();
+  const diags = diagsForPath(state.selectedPath);
+  appendDiagnostics(body, diags);
 }
 
 function renderIssueCount() {
@@ -128,7 +269,7 @@ function renderNodeCard(node, isRoot = false) {
 
 function renderSlot(slot) {
   const wrap = document.createElement("div");
-  wrap.className = `slot${slot.status === "empty" ? " empty" : ""}${hasError(slot.path) ? " has-error" : ""}`;
+  wrap.className = `slot${slot.status === "empty" ? " empty" : ""}${state.selectedPath === slot.path ? " selected" : ""}${hasError(slot.path) ? " has-error" : ""}`;
   wrap.dataset.path = slot.path;
 
   const head = document.createElement("div");
@@ -209,28 +350,26 @@ function renderInspector() {
   const path = state.selectedPath;
   const diags = diagsForPath(path);
   const body = els.inspectorBody;
+  const focus = getInspectorFocusState();
   body.innerHTML = "";
 
   if (path === "root" || !path) {
     renderRootOverview(body, diags);
-    return;
+  } else {
+    const node = findViewNode(path);
+    const slot = findViewSlot(path);
+
+    if (slot && (slot.status === "empty" || slot.list)) {
+      renderSlotFillInspector(body, slot, diags);
+    } else if (node) {
+      renderNodeInspector(body, node, diags);
+    } else {
+      body.innerHTML = `<p class="empty-hint">选中路径：${escapeHtml(path)}</p>`;
+      appendDiagnostics(body, diags);
+    }
   }
 
-  const node = findViewNode(path);
-  const slot = findViewSlot(path);
-
-  if (slot && slot.status === "empty") {
-    renderEmptySlotInspector(body, slot, diags);
-    return;
-  }
-
-  if (node) {
-    renderNodeInspector(body, node, diags);
-    return;
-  }
-
-  body.innerHTML = `<p class="empty-hint">选中路径：${escapeHtml(path)}</p>`;
-  appendDiagnostics(body, diags);
+  restoreInspectorFocus(focus);
 }
 
 function renderRootOverview(body, diags) {
@@ -258,41 +397,79 @@ function renderRootOverview(body, diags) {
   appendDiagnostics(body, diags);
 }
 
-function renderEmptySlotInspector(body, slot, diags) {
+function returnTypeLabel(kind) {
+  return state.catalogByKind[kind]?.returnType || "";
+}
+
+function visibleKindCandidates(candidates) {
+  if (!candidates?.length) return [];
+  if (state.allowIfaceMatch) return candidates;
+  return candidates.filter((c) => c.exact);
+}
+
+function visibleRefs(refs, candidates) {
+  const allowed = new Set(visibleKindCandidates(candidates).map((c) => c.kind));
+  return (refs || []).filter((r) => allowed.has(r.kind));
+}
+
+function renderSlotFillInspector(body, slot, diags) {
+  const append = slot.status === "filled";
   body.innerHTML = `
-    <div class="inspector-title">填槽：${escapeHtml(slot.name)}</div>
-    <div class="inspector-sub">${escapeHtml(slot.path)}</div>
+    <div class="inspector-title">${append ? "添加项" : "填槽"}：${escapeHtml(slot.name)}</div>
+    <div class="inspector-sub">${escapeHtml(slot.path)} · 需要 ${escapeHtml(slot.type || "")}</div>
   `;
 
-  if (slot.refs?.length) {
+  const matchToggle = document.createElement("label");
+  matchToggle.className = "match-toggle";
+  matchToggle.innerHTML = `<input type="checkbox"${state.allowIfaceMatch ? " checked" : ""}> 允许接口匹配`;
+  matchToggle.querySelector("input").addEventListener("change", (e) => {
+    state.allowIfaceMatch = e.target.checked;
+    renderInspector();
+  });
+  body.appendChild(matchToggle);
+
+  const refs = visibleRefs(slot.refs, slot.kinds);
+  if (refs.length) {
     const h = document.createElement("h3");
     h.textContent = "引用已有";
     body.appendChild(h);
-    const refs = document.createElement("ul");
-    refs.className = "candidate-list";
-    for (const ref of slot.refs) {
+    const refList = document.createElement("ul");
+    refList.className = "candidate-list";
+    for (const ref of refs) {
       const li = document.createElement("li");
       li.className = "candidate-item";
-      li.innerHTML = `<div class="kind">${escapeHtml(ref.id)}</div><div class="meta">${escapeHtml(ref.kind)} · 引用共享</div>`;
+      const returnType = returnTypeLabel(ref.kind);
+      li.innerHTML = `<div class="kind">${escapeHtml(ref.id)}</div><div class="meta">${escapeHtml(ref.kind)}${returnType ? ` · ${escapeHtml(returnType)}` : ""} · 引用共享</div>`;
       li.addEventListener("click", () => edit({ type: "attachRef", path: slot.path, refId: ref.id }));
-      refs.appendChild(li);
+      refList.appendChild(li);
     }
-    body.appendChild(refs);
+    body.appendChild(refList);
   }
 
+  const candidates = visibleKindCandidates(slot.kinds);
   const h2 = document.createElement("h3");
   h2.textContent = "新建内联";
   body.appendChild(h2);
-  const kinds = document.createElement("ul");
-  kinds.className = "candidate-list";
-  for (const kind of slot.kinds || []) {
-    const li = document.createElement("li");
-    li.className = "candidate-item";
-    li.innerHTML = `<div class="kind">${escapeHtml(kind)}</div>`;
-    li.addEventListener("click", () => edit({ type: "attach", path: slot.path, kind }));
-    kinds.appendChild(li);
+  if (!candidates.length) {
+    const hint = document.createElement("p");
+    hint.className = "empty-hint";
+    hint.textContent = state.allowIfaceMatch
+      ? "没有可用插件"
+      : "没有精确匹配的插件，可开启「允许接口匹配」查看更多";
+    body.appendChild(hint);
+  } else {
+    const kinds = document.createElement("ul");
+    kinds.className = "candidate-list";
+    for (const candidate of candidates) {
+      const li = document.createElement("li");
+      li.className = `candidate-item${candidate.exact ? "" : " iface-match"}`;
+      const matchHint = candidate.exact ? "" : " · 接口匹配";
+      li.innerHTML = `<div class="kind">${escapeHtml(candidate.kind)}</div><div class="meta">${escapeHtml(candidate.returnType)}${matchHint}</div>`;
+      li.addEventListener("click", () => edit({ type: "attach", path: slot.path, kind: candidate.kind }));
+      kinds.appendChild(li);
+    }
+    body.appendChild(kinds);
   }
-  body.appendChild(kinds);
   appendDiagnostics(body, diags);
 }
 
@@ -385,9 +562,11 @@ function renderNodeInspector(body, node, diags) {
 
 function appendDiagnostics(body, diags) {
   if (!diags.length) return;
+  const section = document.createElement("div");
+  section.className = "diag-section";
   const h = document.createElement("h3");
   h.textContent = "问题";
-  body.appendChild(h);
+  section.appendChild(h);
   const list = document.createElement("ul");
   list.className = "diag-list";
   for (const d of diags) {
@@ -400,7 +579,8 @@ function appendDiagnostics(body, diags) {
     });
     list.appendChild(li);
   }
-  body.appendChild(list);
+  section.appendChild(list);
+  body.appendChild(section);
 }
 
 function findViewNode(path) {
@@ -481,14 +661,39 @@ document.getElementById("btnNew").addEventListener("click", async () => {
   state.selectedPath = "root";
 });
 
-document.getElementById("btnBuild").addEventListener("click", () => runBuild().catch(alert));
+document.getElementById("btnBuild").addEventListener("click", () => {
+  runBuild().catch((err) => {
+    showToast(err.message || "试装配失败", "err");
+  });
+});
 
-document.getElementById("btnExport").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(state.yaml);
-  } catch {
-    alert("复制失败");
+async function importYAMLText(yaml, sourceLabel = "YAML") {
+  const ok = await loadYAML(yaml);
+  if (ok) {
+    els.importDialog.close();
+    showToast(`已导入 ${sourceLabel}`, "ok");
   }
+  return ok;
+}
+
+async function importFromFile(file) {
+  if (!file) return false;
+  try {
+    return await importYAMLText(await file.text(), file.name);
+  } catch (err) {
+    showToast(err.message, "err");
+    return false;
+  }
+}
+
+document.getElementById("btnExport").addEventListener("click", () => {
+  if (!state.yaml?.trim()) {
+    showToast("没有可导出的 YAML", "warn");
+    return;
+  }
+  downloadYAML();
+  document.querySelector(".yaml-fold")?.setAttribute("open", "");
+  showToast(`已下载 ${exportFileName()}`, "ok");
 });
 
 document.getElementById("btnImport").addEventListener("click", () => {
@@ -496,14 +701,22 @@ document.getElementById("btnImport").addEventListener("click", () => {
   els.importDialog.showModal();
 });
 
+document.getElementById("importPickFile").addEventListener("click", () => {
+  els.importFile.click();
+});
+
+els.importFile.addEventListener("change", async () => {
+  const file = els.importFile.files?.[0];
+  els.importFile.value = "";
+  await importFromFile(file);
+});
+
 els.importForm.addEventListener("submit", async (e) => {
   if (e.submitter?.id !== "importConfirm") return;
-  if (!confirmIfDirty()) return;
   try {
-    await edit({ type: "importYAML", yaml: els.yamlInput.value });
-    state.selectedPath = "root";
+    await importYAMLText(els.yamlInput.value);
   } catch (err) {
-    alert(err.message);
+    showToast(err.message, "err");
   }
 });
 
@@ -535,10 +748,34 @@ els.issueCount.addEventListener("click", () => {
   }
 });
 
+async function loadYAML(yaml, { confirmReplace = true } = {}) {
+  if (confirmReplace && !confirmIfDirty()) {
+    return false;
+  }
+  const data = await api("/api/load", {
+    method: "POST",
+    body: JSON.stringify({ yaml }),
+  });
+  await applyEditResponse(data);
+  emitHostEvent("load", data, "importYAML");
+  state.selectedPath = "root";
+  render();
+  return true;
+}
+
 async function boot() {
-  const data = await api("/api/catalog");
+  const data = await api("/api/bootstrap");
   state.catalog = data.kinds || [];
+  state.catalogByKind = Object.fromEntries(
+    state.catalog.map((item) => [item.kind, item])
+  );
   fillRootKindOptions();
+  if (data.document?.plugin?.use) {
+    await applyEditResponse(data);
+    state.selectedPath = "root";
+    render();
+    return;
+  }
   const kind = state.catalog.some((k) => k.kind === "agent")
     ? "agent"
     : state.catalog[0]?.kind;
@@ -549,6 +786,15 @@ async function boot() {
     render();
   }
 }
+
+window.pluginkitManager = {
+  loadYAML,
+  getYAML: () => state.yaml,
+  getDocument: () => state.document,
+  getDiagnostics: () => activeDiagnostics(),
+  onChange: null,
+  onBuild: null,
+};
 
 boot().catch((err) => {
   els.tree.innerHTML = `<p class="empty-hint">${escapeHtml(err.message)}</p>`;

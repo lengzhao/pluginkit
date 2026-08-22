@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pluginkit manager</title>
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <header class="toolbar">
@@ -44,7 +44,11 @@
   <dialog id="importDialog">
     <form method="dialog" id="importForm">
       <h3>导入 YAML</h3>
-      <textarea id="yamlInput" rows="16" placeholder="粘贴 YAML..."></textarea>
+      <div class="dialog-toolbar">
+        <button id="importPickFile" type="button">选择文件</button>
+        <span class="dialog-hint">支持 .yaml / .yml</span>
+      </div>
+      <textarea id="yamlInput" rows="16" placeholder="或粘贴 YAML..."></textarea>
       <div class="dialog-actions">
         <button value="cancel" type="submit">取消</button>
         <button id="importConfirm" value="default" type="submit">导入</button>
@@ -52,6 +56,10 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=6"></script>
+  <input id="importFile" type="file" accept=".yaml,.yml,text/yaml" hidden>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js?v=12"></script>
 </body>
 </html>

@@ -164,6 +164,38 @@ func applyAttachRef(doc *Document, path, refID string) error {
 	return writeAtPath(doc, path, refID)
 }
 
+func isListDepSlot(parentUse, extName string) bool {
+	desc, ok := pluginkit.Describe(parentUse)
+	if !ok {
+		return false
+	}
+	for _, ext := range desc.Extensions {
+		if ext.Name == extName && ext.List {
+			return true
+		}
+	}
+	return false
+}
+
+func listItemsForAppend(raw any, loc resolved) ([]any, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if isDepList(raw) {
+		return decodeDepList(raw)
+	}
+	if loc.Node != nil {
+		return []any{*loc.Node}, nil
+	}
+	if loc.RefID != "" {
+		return []any{loc.RefID}, nil
+	}
+	if id, ok := raw.(string); ok {
+		return []any{id}, nil
+	}
+	return []any{raw}, nil
+}
+
 func writeAtPath(doc *Document, path string, value any) error {
 	loc, err := resolvePath(doc, path)
 	if err != nil {
@@ -187,18 +219,17 @@ func writeAtPath(doc *Document, path string, value any) error {
 		loc.Parent.Deps[loc.Ext] = items
 		return nil
 	}
-	if loc.Node != nil || loc.RefID != "" {
-		loc.Parent.Deps[loc.Ext] = value
-		return nil
-	}
-	raw, ok := loc.Parent.Deps[loc.Ext]
-	if ok && isDepList(raw) {
-		items, err := decodeDepList(raw)
+	if isListDepSlot(loc.Parent.Use, loc.Ext) {
+		items, err := listItemsForAppend(loc.Parent.Deps[loc.Ext], loc)
 		if err != nil {
 			return err
 		}
 		items = append(items, value)
 		loc.Parent.Deps[loc.Ext] = items
+		return nil
+	}
+	if loc.Node != nil || loc.RefID != "" {
+		loc.Parent.Deps[loc.Ext] = value
 		return nil
 	}
 	loc.Parent.Deps[loc.Ext] = value

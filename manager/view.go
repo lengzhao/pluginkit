@@ -25,15 +25,15 @@ type ViewNode struct {
 
 // ViewSlot 是插件扩展点：空槽带候选，已填槽带 items。
 type ViewSlot struct {
-	Name     string         `json:"name"`
-	Path     string         `json:"path"`
-	Status   string         `json:"status"`
-	List     bool           `json:"list,omitempty"`
-	Optional bool           `json:"optional,omitempty"`
-	Type     string         `json:"type,omitempty"`
-	Kinds    []string       `json:"kinds,omitempty"`
-	Refs     []RefCandidate `json:"refs,omitempty"`
-	Items    []ViewNode     `json:"items,omitempty"`
+	Name     string          `json:"name"`
+	Path     string          `json:"path"`
+	Status   string          `json:"status"`
+	List     bool            `json:"list,omitempty"`
+	Optional bool            `json:"optional,omitempty"`
+	Type     string          `json:"type,omitempty"`
+	Kinds    []KindCandidate `json:"kinds,omitempty"`
+	Refs     []RefCandidate  `json:"refs,omitempty"`
+	Items    []ViewNode      `json:"items,omitempty"`
 }
 
 // ViewField 是检查器里的一个 config 字段。
@@ -47,6 +47,13 @@ type ViewField struct {
 type RefCandidate struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"`
+}
+
+// KindCandidate 是空槽可新建的内联插件候选。
+type KindCandidate struct {
+	Kind       string `json:"kind"`
+	ReturnType string `json:"returnType"`
+	Exact      bool   `json:"exact"`
 }
 
 func projectView(doc Document) View {
@@ -106,7 +113,8 @@ func projectSlots(doc Document, parentPath string, node PluginNode, exts []plugi
 	slots := make([]ViewSlot, 0, len(exts))
 	for _, ext := range exts {
 		slotPath := parentPath + ".deps." + ext.Name
-		kinds := pluginkit.CompatibleKinds(ext.Type)
+		candidates := pluginkit.KindCandidates(ext.Type)
+		kindNames := kindNamesFromCandidates(candidates)
 		slot := ViewSlot{
 			Name:     ext.Name,
 			Path:     slotPath,
@@ -114,8 +122,8 @@ func projectSlots(doc Document, parentPath string, node PluginNode, exts []plugi
 			List:     ext.List,
 			Optional: ext.Optional,
 			Type:     pluginkit.FormatType(ext.Type),
-			Kinds:    kinds,
-			Refs:     slotRefs(doc, kinds),
+			Kinds:    toViewKindCandidates(candidates),
+			Refs:     slotRefs(doc, kindNames),
 		}
 		raw, ok := node.Deps[ext.Name]
 		if !ok {
@@ -236,4 +244,24 @@ func addDepRefs(raw any, counts map[string]int) {
 		}
 		addNodeRefs(child, counts)
 	}
+}
+
+func toViewKindCandidates(in []pluginkit.KindCandidate) []KindCandidate {
+	out := make([]KindCandidate, len(in))
+	for i, c := range in {
+		out[i] = KindCandidate{
+			Kind:       c.Kind,
+			ReturnType: c.ReturnType,
+			Exact:      c.Exact,
+		}
+	}
+	return out
+}
+
+func kindNamesFromCandidates(candidates []pluginkit.KindCandidate) []string {
+	names := make([]string, len(candidates))
+	for i, c := range candidates {
+		names[i] = c.Kind
+	}
+	return names
 }

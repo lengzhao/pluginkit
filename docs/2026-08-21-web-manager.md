@@ -39,6 +39,33 @@ manager.Run(manager.Options{
 })
 ```
 
+传入已有 YAML，启动后直接打开该配置：
+
+```go
+yamlBytes, _ := os.ReadFile("config.yaml")
+manager.Run(manager.Options{
+    Addr:        ":8080",
+    InitialYAML: string(yamlBytes),
+    OnChange: func(ctx context.Context, evt manager.DocumentEvent) error {
+        // 每次编辑 / 加载后同步 YAML，或触发动态编排
+        return saveToDB(evt.YAML)
+    },
+    OnBuild: func(ctx context.Context, evt manager.DocumentEvent) error {
+        // 试装配完成后拿到最终 document + diagnostics
+        if hasErrors(evt.Diagnostics) {
+            return nil
+        }
+        return applyRuntime(evt.Document)
+    },
+})
+```
+
+`examples/manager` 支持 `-config` 参数：
+
+```bash
+go run ./examples/manager -config ./examples/agent/config.yaml
+```
+
 也可只挂载 Handler：
 
 ```go
@@ -91,7 +118,7 @@ flowchart TB
 
 插件目录只出现在空槽候选里。点击候选不会毁掉当前文档。
 
-YAML：导入用对话框；导出复制/下载；检查器底部可折叠只读预览。
+YAML：导入支持选择文件或粘贴；导出直接下载 `{rootId}.yaml`（对话框内可复制/再次下载）。
 
 共享实例的子树不进主树。主树在引用芯片上高亮；选中 `shared.<id>` 时，检查器内嵌该实例自己的槽位。
 
@@ -179,6 +206,8 @@ sequenceDiagram
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/catalog` | 已注册 kind 及 config/extensions 元数据，供顶栏选 Root |
+| GET | `/api/bootstrap` | catalog + 可选 `InitialYAML` 预加载的 document/view/diagnostics/yaml |
+| POST | `/api/load` | 请求 `{ "yaml": "..." }`，整表替换文档并返回与 edit 相同形状 |
 | POST | `/api/edit` | 应用操作并返回投影与 structure/plan 诊断 |
 | POST | `/api/build` | 不改文档；在 structure+plan 通过后跑 `ValidateBuild` |
 
@@ -231,7 +260,7 @@ sequenceDiagram
 - `view.root`：装配树根，`role` 为 `inline`。
 - `view.shared`：共享定义列表，供跳到定义；不是侧栏数据源。
 - 节点 `role`：`inline` | `ref` | `slot` | `shared`。
-- 每个节点带 `slots`：空槽含 `kinds` 与可引用 `refs`；已填槽含 `items`（内联子树或引用芯片）。
+- 每个节点带 `slots`：空槽含 `kinds`（`{kind, returnType, exact}`）与可引用 `refs`；已填槽含 `items`（内联子树或引用芯片）。检查器默认只展示 `exact: true` 的候选，用户可切换「允许接口匹配」查看其余候选。
 - 引用节点 `role: ref`，带 `refId`、`kind`、`refCount`。
 
 ### diagnostics
@@ -255,7 +284,26 @@ structure 由 manager 按注册表与 deps 形态收集，path 必须能钉到�
 ```bash
 go run ./examples/manager
 # http://localhost:8080
+
+go run ./examples/manager -config ./examples/agent/config.yaml
 ```
+
+页面加载后可通过 `window.pluginkitManager` 动态加载/读取：
+
+```js
+pluginkitManager.onChange = (evt) => {
+  // evt: { reason, operation, document, yaml, diagnostics }
+  console.log(evt.reason, evt.yaml);
+};
+pluginkitManager.onBuild = (evt) => { /* 试装配结果 */ };
+
+await pluginkitManager.loadYAML(yamlText);
+pluginkitManager.getYAML();
+pluginkitManager.getDocument();
+pluginkitManager.getDiagnostics();
+```
+
+iframe 嵌入时，宿主还可监听 `message` 事件：`event.data.type === "pluginkit:document"`。
 
 ## 明确不做
 
