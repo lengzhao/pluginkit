@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pluginkit manager</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
   <header class="toolbar">
     <div class="brand">
       <h1>pluginkit manager</h1>
-      <p>装配树 · 检查器 · 分层校验</p>
+      <p>实例导航 · 装配树 · 检查器</p>
     </div>
     <div class="controls">
       <label>
@@ -29,8 +29,18 @@
     </div>
   </header>
 
-  <main class="layout">
-    <section id="tree" class="tree" aria-label="装配树"></section>
+  <main class="layout" id="layout">
+    <aside id="navigator" class="navigator" aria-label="实例导航">
+      <div class="nav-header">
+        <h2>实例导航</h2>
+        <button id="navCollapse" type="button" class="nav-toggle" title="折叠导航" aria-label="折叠导航">‹</button>
+      </div>
+      <div id="navBody" class="nav-body"></div>
+    </aside>
+    <button id="navExpand" type="button" class="nav-expand" hidden title="展开导航" aria-label="展开导航">›</button>
+    <section id="canvas" class="canvas" aria-label="主画布">
+      <div id="canvasBody" class="canvas-body"></div>
+    </section>
     <aside id="inspector" class="inspector">
       <h2>检查器</h2>
       <div id="inspectorBody" class="inspector-body"></div>
@@ -60,6 +70,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=12"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

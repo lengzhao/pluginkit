@@ -6,15 +6,22 @@ const state = {
   diagnostics: [],
   yaml: "",
   selectedPath: "root",
+  navFrom: null,
+  navCollapsed: localStorage.getItem("pluginkit:navCollapsed") === "1",
   buildDiagnostics: null,
   allowIfaceMatch: false,
 };
 
 const els = {
+  layout: document.getElementById("layout"),
   rootId: document.getElementById("rootId"),
   rootKind: document.getElementById("rootKind"),
   issueCount: document.getElementById("issueCount"),
-  tree: document.getElementById("tree"),
+  navigator: document.getElementById("navigator"),
+  navBody: document.getElementById("navBody"),
+  navCollapse: document.getElementById("navCollapse"),
+  navExpand: document.getElementById("navExpand"),
+  canvasBody: document.getElementById("canvasBody"),
   inspectorBody: document.getElementById("inspectorBody"),
   yamlPreview: document.getElementById("yamlPreview"),
   importDialog: document.getElementById("importDialog"),
@@ -116,8 +123,8 @@ async function runBuild() {
       showToast(`试装配发现 ${n} 个问题`, "warn");
       const first = activeDiagnostics().find((d) => d.severity === "error");
       if (first) {
-        state.selectedPath = first.path;
-        render();
+        state.navFrom = null;
+        selectPath(first.path);
       }
     }
   } finally {
@@ -176,12 +183,204 @@ function downloadYAML(yaml = state.yaml, filename = exportFileName()) {
 }
 
 function render(options = {}) {
+  applyNavCollapsed();
   renderIssueCount();
-  renderTree();
+  renderNavigator();
+  renderCanvas();
   if (!options.skipInspector) {
     renderInspector();
   }
   els.yamlPreview.textContent = state.yaml;
+}
+
+function applyNavCollapsed() {
+  els.layout.classList.toggle("nav-collapsed", state.navCollapsed);
+  els.navExpand.hidden = !state.navCollapsed;
+}
+
+function setNavCollapsed(collapsed) {
+  state.navCollapsed = collapsed;
+  localStorage.setItem("pluginkit:navCollapsed", collapsed ? "1" : "0");
+  applyNavCollapsed();
+}
+
+function resolveSharedDefinitionPath(path) {
+  if (!path?.startsWith("shared.")) return null;
+  const shared = state.view?.shared || [];
+  const exact = shared.find((s) => s.path === path);
+  if (exact) return exact.path;
+  let best = null;
+  for (const s of shared) {
+    if (path.startsWith(s.path + ".") || path.startsWith(s.path + "[")) {
+      if (!best || s.path.length > best.length) best = s.path;
+    }
+  }
+  return best;
+}
+
+function navInstancePath(path) {
+  if (!path || path === "root" || path.startsWith("root.")) return "root";
+  return resolveSharedDefinitionPath(path) || "root";
+}
+
+function sharedTargetPath(refId) {
+  return `shared.${refId}`;
+}
+
+function isRefTargetSelected(item) {
+  const target = sharedTargetPath(item.refId);
+  return state.selectedPath === item.path || state.selectedPath === target;
+}
+
+function subtreeHasError(path) {
+  return activeDiagnostics().some(
+    (d) =>
+      d.severity === "error" &&
+      (d.path === path || d.path.startsWith(path + ".") || d.path.startsWith(path + "["))
+  );
+}
+
+function renderNavigator() {
+  const body = els.navBody;
+  body.innerHTML = "";
+  if (!state.view?.root) {
+    body.innerHTML = `<p class="empty-hint">正在加载…</p>`;
+    return;
+  }
+
+  const activeNav = navInstancePath(state.selectedPath);
+
+  const assembly = document.createElement("div");
+  assembly.className = "nav-group";
+  assembly.innerHTML = `<div class="nav-group-title">装配</div>`;
+  assembly.appendChild(
+    renderNavItem({
+      path: "root",
+      id: state.document.rootId || "root",
+      kind: state.view.root.kind || state.document.plugin?.use || "",
+      selected: activeNav === "root",
+    })
+  );
+  body.appendChild(assembly);
+
+  const shared = state.view.shared || [];
+  if (shared.length) {
+    const group = document.createElement("div");
+    group.className = "nav-group";
+    group.innerHTML = `<div class="nav-group-title">共享实例 ${shared.length}</div>`;
+    for (const node of shared) {
+      const id = node.path.slice("shared.".length);
+      group.appendChild(
+        renderNavItem({
+          path: node.path,
+          id,
+          kind: node.kind || "",
+          refCount: node.refCount ?? 0,
+          selected: activeNav === node.path,
+        })
+      );
+    }
+    body.appendChild(group);
+  }
+}
+
+function renderNavItem({ path, id, kind, refCount = 0, selected }) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `nav-item${selected ? " selected" : ""}${subtreeHasError(path) ? " has-error" : ""}`;
+  btn.innerHTML = `
+    <div class="nav-item-main">
+      <div class="nav-item-id">${escapeHtml(id)}</div>
+      <div class="nav-item-kind">${escapeHtml(kind)}</div>
+    </div>
+    <div class="nav-item-badges"></div>
+  `;
+  const badges = btn.querySelector(".nav-item-badges");
+  if (path.startsWith("shared.") && refCount > 0) {
+    const badge = document.createElement("span");
+    badge.className = "nav-badge";
+    badge.textContent = `×${refCount}`;
+    badges.appendChild(badge);
+  }
+  if (subtreeHasError(path)) {
+    const badge = document.createElement("span");
+    badge.className = "nav-badge err";
+    badge.textContent = "!";
+    badges.appendChild(badge);
+  }
+  btn.addEventListener("click", () => {
+    if (path === "root") {
+      selectPath(path);
+      return;
+    }
+    const from = state.selectedPath;
+    selectPath(path, { navFrom: from && from !== path ? from : null });
+  });
+  return btn;
+}
+
+function renderCanvas() {
+  const body = els.canvasBody;
+  body.innerHTML = "";
+  if (!state.view?.root) {
+    body.innerHTML = `<p class="empty-hint">正在加载…</p>`;
+    return;
+  }
+
+  const canvasTarget = navInstancePath(state.selectedPath);
+  if (canvasTarget === "root") {
+    renderAssemblyCanvas(body);
+    return;
+  }
+
+  const node = findSharedViewNode(canvasTarget);
+  if (node) renderInstanceCanvas(body, node);
+  else renderAssemblyCanvas(body);
+}
+
+function findSharedViewNode(path) {
+  return state.view?.shared?.find((s) => s.path === path) ?? null;
+}
+
+function renderAssemblyCanvas(body) {
+  const label = document.createElement("div");
+  label.className = "canvas-mode-label";
+  label.textContent = "装配结构";
+  body.appendChild(label);
+  const tree = document.createElement("div");
+  tree.className = "tree";
+  tree.appendChild(renderNodeCard(state.view.root, true));
+  body.appendChild(tree);
+}
+
+function renderInstanceCanvas(body, node) {
+  const label = document.createElement("div");
+  label.className = "canvas-mode-label";
+  label.textContent = "实例";
+  body.appendChild(label);
+
+  const id = node.path.slice("shared.".length);
+  const header = document.createElement("div");
+  header.className = "instance-header";
+  header.innerHTML = `
+    <div class="instance-title">${escapeHtml(id)}</div>
+    <div class="instance-meta">${escapeHtml(node.kind || "")} · 引用 ${node.refCount ?? 0} 处</div>
+  `;
+  body.appendChild(header);
+
+  if (node.slots?.length) {
+    const slots = document.createElement("div");
+    slots.className = "slots";
+    for (const slot of node.slots) {
+      slots.appendChild(renderSlot(slot));
+    }
+    body.appendChild(slots);
+  } else {
+    const hint = document.createElement("p");
+    hint.className = "empty-hint";
+    hint.textContent = "该实例没有依赖槽位，在右侧检查器编辑 config。";
+    body.appendChild(hint);
+  }
 }
 
 function getInspectorFocusState() {
@@ -228,15 +427,6 @@ function renderIssueCount() {
   els.issueCount.className = `issue-btn ${n === 0 ? "ok" : "err"}`;
 }
 
-function renderTree() {
-  els.tree.innerHTML = "";
-  if (!state.view?.root) {
-    els.tree.innerHTML = `<p class="empty-hint">正在加载…</p>`;
-    return;
-  }
-  els.tree.appendChild(renderNodeCard(state.view.root, true));
-}
-
 function renderNodeCard(node, isRoot = false) {
   const card = document.createElement("div");
   card.className = `node-card${isRoot ? " root" : ""}${state.selectedPath === node.path ? " selected" : ""}${hasError(node.path) ? " has-error" : ""}`;
@@ -251,8 +441,8 @@ function renderNodeCard(node, isRoot = false) {
     </div>
   `;
   head.addEventListener("click", () => {
-    state.selectedPath = node.path;
-    render();
+    state.navFrom = null;
+    selectPath(node.path);
   });
   card.appendChild(head);
 
@@ -288,8 +478,8 @@ function renderSlot(slot) {
     hint.textContent = "未配置 · 点击选择插件";
     hint.style.cursor = "pointer";
     hint.addEventListener("click", () => {
-      state.selectedPath = slot.path;
-      render();
+      state.navFrom = null;
+      selectPath(slot.path);
     });
     wrap.appendChild(hint);
     return wrap;
@@ -305,8 +495,8 @@ function renderSlot(slot) {
     add.type = "button";
     add.textContent = "+ 添加";
     add.addEventListener("click", () => {
-      state.selectedPath = slot.path;
-      render();
+      state.navFrom = null;
+      selectPath(slot.path);
     });
     items.appendChild(add);
   }
@@ -315,25 +505,40 @@ function renderSlot(slot) {
 }
 
 function renderItem(item, slot) {
+  const row = document.createElement("div");
+  row.className = "slot-item";
+  row.dataset.path = item.path;
+
+  const main = document.createElement("div");
+  main.className = "slot-item-main";
+
   if (item.role === "ref") {
     const chip = document.createElement("div");
-    chip.className = `ref-chip${state.selectedPath === item.path ? " selected" : ""}`;
+    chip.className = `ref-chip${isRefTargetSelected(item) ? " selected" : ""}`;
+    chip.dataset.path = item.path;
+    chip.dataset.refTarget = sharedTargetPath(item.refId);
     chip.textContent = `→ ${item.refId} (${item.kind || "?"})`;
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.selectedPath = item.path;
-      render();
+      enterSharedRef(item);
     });
-    return chip;
+    main.append(chip, createItemRemoveButton(item));
+    row.appendChild(main);
+    return row;
   }
+
   const link = document.createElement("div");
   link.className = `inline-link${state.selectedPath === item.path ? " selected" : ""}`;
+  link.dataset.path = item.path;
   link.innerHTML = `<div class="node-kind">${escapeHtml(item.kind)}</div><div class="node-path">${escapeHtml(item.path)}</div>`;
   link.addEventListener("click", (e) => {
     e.stopPropagation();
-    state.selectedPath = item.path;
-    render();
+    state.navFrom = null;
+    selectPath(item.path);
   });
+  main.append(link, createItemRemoveButton(item));
+  row.appendChild(main);
+
   if (item.slots?.length) {
     const nested = document.createElement("div");
     nested.className = "slots";
@@ -341,9 +546,107 @@ function renderItem(item, slot) {
     for (const s of item.slots) {
       nested.appendChild(renderSlot(s));
     }
-    link.appendChild(nested);
+    row.appendChild(nested);
   }
-  return link;
+  return row;
+}
+
+function createItemRemoveButton(item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "slot-item-remove";
+  btn.title = item.role === "ref" ? "解除引用" : "删除";
+  btn.setAttribute("aria-label", btn.title);
+  btn.textContent = "×";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    edit({ type: "remove", path: item.path });
+  });
+  return btn;
+}
+
+function collectRefSites(refId) {
+  const sites = [];
+  const visit = (node) => {
+    if (!node) return;
+    if (node.role === "ref" && node.refId === refId) sites.push(node.path);
+    for (const slot of node.slots || []) {
+      for (const item of slot.items || []) visit(item);
+    }
+  };
+  visit(state.view?.root);
+  for (const s of state.view?.shared || []) visit(s);
+  return sites;
+}
+
+function selectPath(path, { navFrom = null } = {}) {
+  state.selectedPath = path;
+  state.navFrom = navFrom;
+  render();
+  scrollToSelected(path);
+}
+
+function enterSharedRef(item) {
+  state.navFrom = null;
+  selectPath(sharedTargetPath(item.refId));
+}
+
+function scrollToSelected(path) {
+  requestAnimationFrame(() => {
+    const el = els.canvasBody.querySelector(`[data-path="${CSS.escape(path)}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+}
+
+function prependInspectorNav(body, path) {
+  if (!state.navFrom || state.navFrom === path) return;
+
+  const nav = document.createElement("div");
+  nav.className = "inspector-nav";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "nav-back";
+  back.textContent = `← 返回 ${shortPathLabel(state.navFrom)}`;
+  back.addEventListener("click", () => {
+    const from = state.navFrom;
+    state.navFrom = null;
+    selectPath(from);
+  });
+  nav.appendChild(back);
+  body.insertBefore(nav, body.firstChild);
+}
+
+function shortPathLabel(path) {
+  if (path === "root") return "Root";
+  if (path.startsWith("shared.")) {
+    const rest = path.slice("shared.".length);
+    const dot = rest.indexOf(".");
+    return dot === -1 ? `共享 ${rest}` : `共享 ${rest.slice(0, dot)} · ${rest.slice(dot + 1)}`;
+  }
+  const deps = path.indexOf(".deps.");
+  if (deps === -1) return path;
+  return path.slice(deps + ".deps.".length);
+}
+
+function appendRefSites(body, refId) {
+  const sites = collectRefSites(refId);
+  if (!sites.length) return;
+  const h = document.createElement("h3");
+  h.textContent = "被引用于";
+  body.appendChild(h);
+  const list = document.createElement("ul");
+  list.className = "candidate-list";
+  for (const site of sites) {
+    const li = document.createElement("li");
+    li.className = "candidate-item";
+    li.innerHTML = `<div class="kind">${escapeHtml(shortPathLabel(site))}</div><div class="meta">${escapeHtml(site)}</div>`;
+    li.addEventListener("click", () => {
+      state.navFrom = null;
+      selectPath(site);
+    });
+    list.appendChild(li);
+  }
+  body.appendChild(list);
 }
 
 function renderInspector() {
@@ -354,7 +657,13 @@ function renderInspector() {
   body.innerHTML = "";
 
   if (path === "root" || !path) {
-    renderRootOverview(body, diags);
+    const node = state.view?.root;
+    if (node) {
+      renderNodeInspector(body, node, diags);
+    } else {
+      body.innerHTML = `<p class="empty-hint">无文档</p>`;
+      appendDiagnostics(body, diags);
+    }
   } else {
     const node = findViewNode(path);
     const slot = findViewSlot(path);
@@ -367,34 +676,10 @@ function renderInspector() {
       body.innerHTML = `<p class="empty-hint">选中路径：${escapeHtml(path)}</p>`;
       appendDiagnostics(body, diags);
     }
+    prependInspectorNav(body, path);
   }
 
   restoreInspectorFocus(focus);
-}
-
-function renderRootOverview(body, diags) {
-  body.innerHTML = `
-    <div class="inspector-title">Root 概览</div>
-    <div class="inspector-sub">${escapeHtml(state.document.rootId)} · ${escapeHtml(state.document.plugin?.use || "")}</div>
-    <p class="empty-hint">在左侧装配树选择空槽或节点进行编辑。共享实例通过「提取为共享」创建，不会单独占一栏。</p>
-  `;
-  const shared = state.view?.shared || [];
-  if (shared.length) {
-    const list = document.createElement("ul");
-    list.className = "candidate-list";
-    for (const s of shared) {
-      const li = document.createElement("li");
-      li.className = "candidate-item";
-      li.innerHTML = `<div class="kind">${escapeHtml(s.path)}</div><div class="meta">${escapeHtml(s.kind)} · 引用 ${s.refCount ?? 0} 处</div>`;
-      li.addEventListener("click", () => {
-        state.selectedPath = s.path;
-        render();
-      });
-      list.appendChild(li);
-    }
-    body.appendChild(list);
-  }
-  appendDiagnostics(body, diags);
 }
 
 function returnTypeLabel(kind) {
@@ -487,8 +772,7 @@ function renderNodeInspector(body, node, diags) {
     gotoBtn.type = "button";
     gotoBtn.textContent = "跳到定义";
     gotoBtn.addEventListener("click", () => {
-      state.selectedPath = `shared.${node.refId}`;
-      render();
+      selectPath(`shared.${node.refId}`, { navFrom: node.path });
     });
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -548,13 +832,8 @@ function renderNodeInspector(body, node, diags) {
     body.appendChild(actions);
   }
 
-  if (node.role === "shared" && node.slots?.length) {
-    const slots = document.createElement("div");
-    slots.className = "slots";
-    for (const slot of node.slots) {
-      slots.appendChild(renderSlot(slot));
-    }
-    body.appendChild(slots);
+  if (node.role === "shared") {
+    appendRefSites(body, node.path.slice("shared.".length).split(".")[0]);
   }
 
   appendDiagnostics(body, diags);
@@ -574,8 +853,8 @@ function appendDiagnostics(body, diags) {
     li.className = "diag-item";
     li.innerHTML = `<div class="path">${escapeHtml(d.path)} · ${escapeHtml(d.stage)}</div>${escapeHtml(d.message)}`;
     li.addEventListener("click", () => {
-      state.selectedPath = d.path;
-      render();
+      state.navFrom = null;
+      selectPath(d.path);
     });
     list.appendChild(li);
   }
@@ -658,7 +937,9 @@ function confirmIfDirty() {
 document.getElementById("btnNew").addEventListener("click", async () => {
   if (!confirmIfDirty()) return;
   await edit({ type: "newRoot", kind: els.rootKind.value });
+  state.navFrom = null;
   state.selectedPath = "root";
+  render();
 });
 
 document.getElementById("btnBuild").addEventListener("click", () => {
@@ -737,16 +1018,21 @@ els.rootKind.addEventListener("change", async () => {
     return;
   }
   await edit({ type: "newRoot", kind: els.rootKind.value });
+  state.navFrom = null;
   state.selectedPath = "root";
+  render();
 });
 
 els.issueCount.addEventListener("click", () => {
   const first = activeDiagnostics().find((d) => d.severity === "error");
   if (first) {
-    state.selectedPath = first.path;
-    render();
+    state.navFrom = null;
+    selectPath(first.path);
   }
 });
+
+els.navCollapse.addEventListener("click", () => setNavCollapsed(true));
+els.navExpand.addEventListener("click", () => setNavCollapsed(false));
 
 async function loadYAML(yaml, { confirmReplace = true } = {}) {
   if (confirmReplace && !confirmIfDirty()) {
@@ -758,6 +1044,7 @@ async function loadYAML(yaml, { confirmReplace = true } = {}) {
   });
   await applyEditResponse(data);
   emitHostEvent("load", data, "importYAML");
+  state.navFrom = null;
   state.selectedPath = "root";
   render();
   return true;
@@ -772,6 +1059,7 @@ async function boot() {
   fillRootKindOptions();
   if (data.document?.plugin?.use) {
     await applyEditResponse(data);
+    state.navFrom = null;
     state.selectedPath = "root";
     render();
     return;
@@ -781,7 +1069,9 @@ async function boot() {
     : state.catalog[0]?.kind;
   if (kind) {
     await edit({ type: "newRoot", kind });
+    state.navFrom = null;
     state.selectedPath = "root";
+    render();
   } else {
     render();
   }
@@ -797,5 +1087,5 @@ window.pluginkitManager = {
 };
 
 boot().catch((err) => {
-  els.tree.innerHTML = `<p class="empty-hint">${escapeHtml(err.message)}</p>`;
+  els.canvasBody.innerHTML = `<p class="empty-hint">${escapeHtml(err.message)}</p>`;
 });
