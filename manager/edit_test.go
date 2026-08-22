@@ -620,3 +620,116 @@ func hasRef(refs []RefCandidate, id, kind string) bool {
 	}
 	return false
 }
+
+func TestApplyNewRootHasEmptyDeps(t *testing.T) {
+	ensureTestPlugins(t)
+	out, err := apply(Document{}, Operation{Type: "newRoot", Kind: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Plugin.Use != "agent" || out.RootID != "agent" {
+		t.Fatalf("doc=%#v", out)
+	}
+	if len(out.Plugin.Deps) != 0 {
+		t.Fatalf("deps must be empty, got %#v", out.Plugin.Deps)
+	}
+}
+
+func TestApplyAttachAndHoist(t *testing.T) {
+	ensureTestPlugins(t)
+	doc, err := apply(Document{}, Operation{Type: "newRoot", Kind: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = apply(doc, Operation{Type: "attach", Path: "root.deps.llm", Kind: "openai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = apply(doc, Operation{Type: "hoist", Path: "root.deps.llm", ID: "llm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc.Plugin.Deps["llm"].(string); !ok {
+		t.Fatalf("expected ref, got %#v", doc.Plugin.Deps["llm"])
+	}
+	if doc.Shared["llm"].Use != "openai" {
+		t.Fatalf("shared=%#v", doc.Shared)
+	}
+}
+
+func TestApplyRemoveOrphanShared(t *testing.T) {
+	ensureTestPlugins(t)
+	doc := Document{
+		RootID: "agent",
+		Plugin: PluginNode{Use: "agent", Deps: map[string]any{"llm": "llm", "tools": []any{}}},
+		Shared: map[string]PluginNode{"llm": {Use: "openai"}},
+	}
+	out, err := apply(doc, Operation{Type: "remove", Path: "root.deps.llm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out.Plugin.Deps["llm"]; ok {
+		t.Fatal("llm slot should be empty")
+	}
+	if _, ok := out.Shared["llm"]; ok {
+		t.Fatal("orphan shared should be deleted")
+	}
+}
+
+func TestApplyImportYAML(t *testing.T) {
+	ensureTestPlugins(t)
+	raw := "agent:\n  use: agent\n  deps:\n    llm:\n      use: openai\n"
+	out, err := apply(Document{}, Operation{Type: "importYAML", YAML: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.RootID != "agent" {
+		t.Fatalf("root=%q", out.RootID)
+	}
+	llm, ok := out.Plugin.Deps["llm"].(PluginNode)
+	if !ok {
+		if m, ok := out.Plugin.Deps["llm"].(map[string]any); ok {
+			if m["use"] != "openai" {
+				t.Fatalf("llm=%#v", out.Plugin.Deps["llm"])
+			}
+			return
+		}
+		t.Fatalf("llm=%#v", out.Plugin.Deps["llm"])
+	}
+	if llm.Use != "openai" {
+		t.Fatalf("llm=%#v", llm)
+	}
+}
+
+func TestApplyUnknownPathIsError(t *testing.T) {
+	ensureTestPlugins(t)
+	_, err := apply(Document{RootID: "agent", Plugin: PluginNode{Use: "agent"}}, Operation{
+		Type: "attach", Path: "root.foo", Kind: "openai",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestApplySetConfigNested(t *testing.T) {
+	ensureTestPlugins(t)
+	doc, err := apply(Document{}, Operation{Type: "newRoot", Kind: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = apply(doc, Operation{Type: "attach", Path: "root.deps.llm", Kind: "openai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err = apply(doc, Operation{Type: "setConfig", Path: "root.deps.llm", Config: map[string]any{"model": "gpt-5"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm, ok := doc.Plugin.Deps["llm"].(PluginNode)
+	if !ok {
+		t.Fatalf("llm=%#v", doc.Plugin.Deps["llm"])
+	}
+	if llm.Config["model"] != "gpt-5" {
+		t.Fatalf("config=%#v", llm.Config)
+	}
+}
