@@ -3,11 +3,12 @@ package manager
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 
 	"github.com/lengzhao/pluginkit"
+	"github.com/lengzhao/pluginkit/build"
 )
 
 type server struct {
@@ -32,19 +33,22 @@ type catalogResponse struct {
 	Kinds []kindInfo `json:"kinds"`
 }
 
-type validateResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+type editRequest struct {
+	Document Document  `json:"document"`
+	Op       Operation `json:"op"`
+}
+
+type editResponse struct {
+	Document    Document     `json:"document"`
+	View        View         `json:"view"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+	YAML        string       `json:"yaml"`
 }
 
 func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/catalog", s.handleCatalog)
-	mux.HandleFunc("GET /api/describe/{kind}", s.handleDescribe)
-	mux.HandleFunc("GET /api/compatible", s.handleCompatible)
-	mux.HandleFunc("POST /api/export", s.handleExport)
-	mux.HandleFunc("POST /api/import", s.handleImport)
-	mux.HandleFunc("POST /api/validate", s.handleValidate)
-	mux.HandleFunc("POST /api/template/{kind}", s.handleTemplate)
+	mux.HandleFunc("POST /api/edit", s.handleEdit)
+	mux.HandleFunc("POST /api/build", s.handleBuild)
 }
 
 func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
@@ -59,116 +63,103 @@ func (s *server) handleCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, catalogResponse{Kinds: kinds})
 }
 
-func (s *server) handleDescribe(w http.ResponseWriter, r *http.Request) {
-	kind := r.PathValue("kind")
-	info, ok := describeKind(kind)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown kind %q", kind))
-		return
-	}
-	writeJSON(w, http.StatusOK, info)
-}
-
-func (s *server) handleCompatible(w http.ResponseWriter, r *http.Request) {
-	parent := r.URL.Query().Get("parent")
-	extName := r.URL.Query().Get("ext")
-	if parent == "" || extName == "" {
-		writeError(w, http.StatusBadRequest, "parent and ext are required")
-		return
-	}
-	desc, ok := pluginkit.Describe(parent)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown parent kind %q", parent))
-		return
-	}
-	var wantExt *pluginkit.FieldDescription
-	for i := range desc.Extensions {
-		if desc.Extensions[i].Name == extName {
-			wantExt = &desc.Extensions[i]
-			break
-		}
-	}
-	if wantExt == nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("extension %q not found on %q", extName, parent))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"kinds": pluginkit.CompatibleKinds(wantExt.Type),
-	})
-}
-
-func (s *server) handleExport(w http.ResponseWriter, r *http.Request) {
-	doc, err := readDocument(r)
+func (s *server) handleEdit(w http.ResponseWriter, r *http.Request) {
+	req, err := readEditRequest(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := doc.Validate(); err != nil {
+	doc, err := apply(req.Document, req.Op)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	yamlBytes, err := doc.ToYAML()
+	writeEditResponse(w, http.StatusOK, doc)
+}
+
+func (s *server) handleBuild(w http.ResponseWriter, r *http.Request) {
+	req, err := readEditRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	doc := req.Document
+	diags := collectDiagnostics(doc)
+	if !hasErrorDiag(diags) && s.validateBuild != nil {
+		if err := s.validateBuild(r.Context(), doc); err != nil {
+			diags = append(diags, buildDiagnostic(doc, err))
+		}
+	}
+	resp, err := buildEditResponse(doc, diags)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"yaml": string(yamlBytes)})
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *server) handleImport(w http.ResponseWriter, r *http.Request) {
+func readEditRequest(r *http.Request) (editRequest, error) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return editRequest{}, err
 	}
-	var payload struct {
-		YAML string `json:"yaml"`
+	var req editRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return editRequest{}, err
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	doc, err := FromYAML([]byte(payload.YAML))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, doc)
+	return req, nil
 }
 
-func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
-	doc, err := readDocument(r)
+func writeEditResponse(w http.ResponseWriter, status int, doc Document) {
+	diags := collectDiagnostics(doc)
+	resp, err := buildEditResponse(doc, diags)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := validateDocument(r.Context(), doc, s.validateBuild); err != nil {
-		writeJSON(w, http.StatusOK, validateResponse{OK: false, Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, validateResponse{OK: true})
+	writeJSON(w, status, resp)
 }
 
-func (s *server) handleTemplate(w http.ResponseWriter, r *http.Request) {
-	kind := r.PathValue("kind")
-	desc, ok := pluginkit.Describe(kind)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("unknown kind %q", kind))
-		return
+func buildEditResponse(doc Document, diags []Diagnostic) (editResponse, error) {
+	if diags == nil {
+		diags = []Diagnostic{}
 	}
-	writeJSON(w, http.StatusOK, desc.Template())
+	yamlBytes, err := doc.ToYAML()
+	if err != nil {
+		return editResponse{}, err
+	}
+	return editResponse{
+		Document:    doc,
+		View:        projectView(doc),
+		Diagnostics: diags,
+		YAML:        string(yamlBytes),
+	}, nil
 }
 
-func readDocument(r *http.Request) (Document, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return Document{}, err
+func hasErrorDiag(diags []Diagnostic) bool {
+	for _, d := range diags {
+		if d.Severity == "error" {
+			return true
+		}
 	}
-	var doc Document
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return Document{}, err
+	return false
+}
+
+func buildDiagnostic(doc Document, err error) Diagnostic {
+	path := "root"
+	var be *build.Error
+	if errors.As(err, &be) {
+		if mapped, ok := planErrorPath(doc, be.ID); ok {
+			path = mapped
+		}
 	}
-	return doc, nil
+	return Diagnostic{
+		Path:     path,
+		Severity: "error",
+		Stage:    "build",
+		Code:     "build",
+		Message:  err.Error(),
+	}
 }
 
 func describeKind(kind string) (kindInfo, bool) {
