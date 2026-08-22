@@ -1,7 +1,7 @@
 # pluginkit Web Manager
 
 **日期：** 2026-08-22  
-**状态：** 设计已确认（待实现）  
+**状态：** 已实现  
 **路径：** `github.com/lengzhao/pluginkit/manager`
 
 ## 目标
