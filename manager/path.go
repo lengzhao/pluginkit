@@ -19,22 +19,23 @@ type pathSeg struct {
 	index int
 }
 
-func resolvePath(doc Document, path string) (resolved, error) {
+func resolvePath(doc *Document, path string) (resolved, error) {
 	unknown := func() (resolved, error) {
 		return resolved{}, fmt.Errorf("unknown path %q", path)
+	}
+	if doc == nil {
+		return unknown()
 	}
 
 	switch {
 	case path == "root":
-		node := doc.Plugin
-		return resolved{Node: &node, Index: -1}, nil
+		return resolved{Node: &doc.Plugin, Index: -1}, nil
 	case strings.HasPrefix(path, "root."):
 		segs, err := parseDepsWalk(strings.TrimPrefix(path, "root"))
 		if err != nil {
 			return unknown()
 		}
-		plugin := doc.Plugin
-		return resolveFrom(&plugin, segs, path)
+		return resolveFrom(&doc.Plugin, segs, path)
 	case strings.HasPrefix(path, "shared."):
 		rest := strings.TrimPrefix(path, "shared.")
 		if rest == "" {
@@ -47,18 +48,18 @@ func resolvePath(doc Document, path string) (resolved, error) {
 		if id == "" {
 			return unknown()
 		}
-		node, ok := doc.Shared[id]
-		if !ok {
+		parent, err := internShared(doc, id)
+		if err != nil {
 			return unknown()
 		}
 		if suffix == "" {
-			return resolved{Node: &node, Index: -1}, nil
+			return resolved{Node: parent, Index: -1}, nil
 		}
 		segs, err := parseDepsWalk(suffix)
 		if err != nil {
 			return unknown()
 		}
-		return resolveFrom(&node, segs, path)
+		return resolveFrom(parent, segs, path)
 	default:
 		return unknown()
 	}
@@ -70,11 +71,14 @@ func resolveFrom(parent *PluginNode, segs []pathSeg, fullPath string) (resolved,
 	}
 	current := parent
 	for i, seg := range segs {
+		last := i == len(segs)-1
 		raw, ok := current.Deps[seg.name]
 		if !ok {
+			if last && seg.index < 0 {
+				return resolved{Parent: current, Ext: seg.name, Index: -1}, nil
+			}
 			return unknown()
 		}
-		last := i == len(segs)-1
 		if seg.index >= 0 {
 			items, err := decodeDepList(raw)
 			if err != nil {
@@ -87,23 +91,95 @@ func resolveFrom(parent *PluginNode, segs []pathSeg, fullPath string) (resolved,
 			if last {
 				return depResolved(current, seg.name, seg.index, item, fullPath)
 			}
-			node, err := decodeDepNode(item)
+			node, err := internListItem(current, seg.name, items, seg.index)
 			if err != nil {
 				return unknown()
 			}
-			current = nodePtr(node)
+			current = node
 			continue
 		}
 		if last {
+			if isDepList(raw) {
+				return resolved{Parent: current, Ext: seg.name, Index: -1}, nil
+			}
 			return depResolved(current, seg.name, -1, raw, fullPath)
 		}
-		node, err := decodeDepNode(raw)
+		node, err := internChild(current, seg.name)
 		if err != nil {
 			return unknown()
 		}
-		current = nodePtr(node)
+		current = node
 	}
 	return unknown()
+}
+
+func internShared(doc *Document, id string) (*PluginNode, error) {
+	node, ok := doc.Shared[id]
+	if !ok {
+		return nil, fmt.Errorf("unknown shared %q", id)
+	}
+	if node.Deps == nil {
+		node.Deps = map[string]any{}
+	}
+	doc.Shared[id] = node
+	return &node, nil
+}
+
+func internChild(parent *PluginNode, name string) (*PluginNode, error) {
+	raw := parent.Deps[name]
+	if _, ok := raw.(string); ok {
+		return nil, fmt.Errorf("ref")
+	}
+	if isDepList(raw) {
+		return nil, fmt.Errorf("list")
+	}
+	if p, ok := raw.(*PluginNode); ok {
+		if p.Deps == nil {
+			p.Deps = map[string]any{}
+		}
+		return p, nil
+	}
+	node, err := decodeDepNode(raw)
+	if err != nil {
+		return nil, err
+	}
+	if node.Deps == nil {
+		node.Deps = map[string]any{}
+	}
+	parent.Deps[name] = node
+	return &node, nil
+}
+
+func internListItem(parent *PluginNode, name string, items []any, index int) (*PluginNode, error) {
+	item := items[index]
+	if _, ok := item.(string); ok {
+		return nil, fmt.Errorf("ref")
+	}
+	if p, ok := item.(*PluginNode); ok {
+		if p.Deps == nil {
+			p.Deps = map[string]any{}
+		}
+		return p, nil
+	}
+	node, err := decodeDepNode(item)
+	if err != nil {
+		return nil, err
+	}
+	if node.Deps == nil {
+		node.Deps = map[string]any{}
+	}
+	items[index] = node
+	parent.Deps[name] = items
+	return &node, nil
+}
+
+func isDepList(raw any) bool {
+	switch raw.(type) {
+	case []any, []PluginNode:
+		return true
+	default:
+		return false
+	}
 }
 
 func depResolved(parent *PluginNode, ext string, index int, raw any, fullPath string) (resolved, error) {
