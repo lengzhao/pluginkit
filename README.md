@@ -5,7 +5,7 @@
 ```
 github.com/lengzhao/pluginkit          插件类型：Register / Lookup / Describe
 github.com/lengzhao/pluginkit/config   配置识别：PluginUse / Parse
-github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / GetByID
+github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / GetByID / Collect
 github.com/lengzhao/pluginkit/manager  Web 配置管理 UI（可选）
 ```
 
@@ -79,6 +79,18 @@ agent:
 内联实例未写 `id` 时按路径生成，例如 `workflow.steps[0]`。需要复用的实例放到顶层并用 id 引用。插件自己的 `config` 按 JSON 解到构造函数参数，未知字段会失败。
 
 `BuildInto` 仍可用于直接填充 target struct，但 workflow、agent、ETL 这类编排应优先建模为 root plugin，把引用和内联子插件放进插件 `Deps`。
+
+## 按类型收集已构造实例
+
+`Build` 返回的 `Result` 保存本次 root 可达且已成功构造的全部实例。运行期入口可以在启动后按接口筛选贡献者，例如 slash command provider：
+
+```go
+app, result, err := build.Build[*App](ctx, graph, "app")
+providers := build.Collect[command.Provider](result)
+registry, err := command.NewRegistry(providers)
+```
+
+`CollectInstances[T]` 会额外保留实例 `id` 和 `kind`，便于诊断或冲突报错。收集范围是当前这次 build result，不是全局 registry，也不会扫描所有已注册 kind。
 
 ## 查看插件配置与扩展点
 
@@ -161,6 +173,9 @@ cd examples/agent && go run . config.flat.yaml
 
 cd examples/workflow && go run .
 cd examples/workflow && go run . config.flat.yaml
+
+cd examples/commands && go run .
+cd examples/commands && go run . compact
 
 go run ./examples/manager
 ```

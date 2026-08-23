@@ -1,0 +1,12 @@
+app:
+  use: app
+  deps:
+    services:
+      - compaction
+      - session
+
+compaction:
+  use: compaction
+
+session:
+  use: session
