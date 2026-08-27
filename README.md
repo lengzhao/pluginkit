@@ -80,17 +80,35 @@ agent:
 
 `BuildInto` 仍可用于直接填充 target struct，但 workflow、agent、ETL 这类编排应优先建模为 root plugin，把引用和内联子插件放进插件 `Deps`。
 
-## 按类型收集已构造实例
+## 按类型收集与后置装配
 
-`Build` 返回的 `Result` 保存本次 root 可达且已成功构造的全部实例。运行期入口可以在启动后按接口筛选贡献者，例如 slash command provider：
+`Build` 返回的 `Result` 保存本次 root 可达且已成功构造的全部实例。运行期入口可以按接口筛选贡献者，再装配到收集器，例如 slash command provider：
 
 ```go
 app, result, err := build.Build[*App](ctx, graph, "app")
-providers := build.Collect[command.Provider](result)
-registry, err := command.NewRegistry(providers)
+if err != nil {
+    return err
+}
+
+// 约定式：收集器实现 SetContributions([]T)
+if err := build.WireSetter[command.Provider](result); err != nil {
+    return err
+}
+
+// 自定义装配函数：适合 SetCommands 这类宿主自定义方法名
+if err := build.WireContributions(
+    result,
+    func(collector command.Collector, providers []command.Provider) error {
+        return collector.SetCommands(providers)
+    },
+); err != nil {
+    return err
+}
 ```
 
-`CollectInstances[T]` 会额外保留实例 `id` 和 `kind`，便于诊断或冲突报错。收集范围是当前这次 build result，不是全局 registry，也不会扫描所有已注册 kind。
+`Collect[T]` 只负责从 `Result` 筛选实例，不执行装配。`CollectInstances[T]` 会额外保留实例 `id` 和 `kind`，便于诊断或冲突报错。收集范围是当前这次 build result，不是全局 registry，也不会扫描所有已注册 kind。
+
+当多个插件向同一个 registry 贡献能力、又不想在 deps 里形成环时，把收集器建模为独立插件实例，build 完成后再 wire。没有贡献者时不会调用收集器；有贡献者但找不到可装配的收集器时返回 `build.ErrNoContributionsCollector`；`nil` result 是 no-op。
 
 ## 查看插件配置与扩展点
 

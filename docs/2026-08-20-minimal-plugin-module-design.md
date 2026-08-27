@@ -527,11 +527,37 @@ func BuildInto(ctx context.Context, plugins map[string]any, target any) (*Result
 func GetByID[T any](result *Result, id string) (T, bool)
 
 func RequireByID[T any](result *Result, field string, id string) (T, error)
+
+func Collect[T any](result *Result) []T
+
+func CollectInstances[T any](result *Result) []TypedInstance[T]
+
+type ContributionsSetter[T any] interface {
+    SetContributions([]T) error
+}
+
+func WireSetter[T any](result *Result) error
+
+func WireContributions[Contributor, Collector any](
+    result *Result,
+    attach func(Collector, []Contributor) error,
+) error
+
+var ErrNoContributionsCollector error
 ```
 
 `Build[T]` 是默认入口：把配置看成实例图，`rootID` 指定最终要构造的根实例。`Build` 从 root 出发递归收集 `deps`，把内联私有插件展开成带路径 id 的实例节点，生成不可导出的装配 plan，随后 executor 按拓扑顺序解码 `Config`、注入 `Deps`、调用构造函数，并检查 root 实例能否作为 `T` 返回。
 
 `BuildInto` 是 target struct 入口：读目标 struct、对照 `config.Parse` 的结果检查单值/多值，并把构造结果写回 target。它适合 Agent 这类需要一次装配多个扩展点的场景。
+
+`Collect[T]` 从 `Result` 筛选可断言为 `T` 的实例，不执行装配。`CollectInstances[T]` 额外保留实例 `id` 和 `kind`。
+
+当多个插件向同一个 registry 贡献能力、又不想在 deps 里形成环时，可把收集器建模为独立插件实例，build 完成后再 wire：
+
+- `WireSetter[T]`：约定收集器实现 `SetContributions([]T) error`，扫描 result 中所有非 nil 收集器并调用。
+- `WireContributions`：用自定义 `attach` 函数装配，适合 `SetCommands` 这类宿主自定义方法名；`Collector` 类型参数限定收集器范围。
+
+没有贡献者时不会调用收集器；有贡献者但找不到可装配的收集器时返回 `ErrNoContributionsCollector`；`nil` result 是 no-op。收集器不应同时作为贡献者，否则 `WireSetter` 也会对其调用 `SetContributions`。
 
 plan / executor 是 `build` 包内部结构，不作为公开 API。公开 API 只表达「按配置构造插件实例图」或「按配置填充 target」。
 

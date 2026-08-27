@@ -4,6 +4,10 @@ app:
     services:
       - compaction
       - session
+    commands: commands
+
+commands:
+  use: commands
 
 compaction:
   use: compaction

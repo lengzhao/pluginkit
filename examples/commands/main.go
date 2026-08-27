@@ -28,10 +28,12 @@ type Service interface {
 
 type appDeps struct {
 	Services []Service `json:"services"`
+	Commands *Registry `json:"commands"`
 }
 
 type app struct {
 	services []Service
+	commands *Registry
 }
 
 type compactionService struct{}
@@ -68,20 +70,24 @@ type Registry struct {
 	byName map[string]Command
 }
 
-func NewRegistry(providers []Provider) (*Registry, error) {
-	r := &Registry{byName: make(map[string]Command)}
+func (r *Registry) SetContributions(providers []Provider) error {
+	r.byName = make(map[string]Command)
 	for _, provider := range providers {
 		for _, cmd := range provider.Commands() {
 			if cmd.Name == "" {
-				return nil, fmt.Errorf("empty command name")
+				return fmt.Errorf("empty command name")
 			}
 			if _, exists := r.byName[cmd.Name]; exists {
-				return nil, fmt.Errorf("duplicate command %q", cmd.Name)
+				return fmt.Errorf("duplicate command %q", cmd.Name)
 			}
 			r.byName[cmd.Name] = cmd
 		}
 	}
-	return r, nil
+	return nil
+}
+
+func NewRegistry() *Registry {
+	return &Registry{byName: make(map[string]Command)}
 }
 
 func (r *Registry) List() []Command {
@@ -101,17 +107,22 @@ func (r *Registry) Run(name string) error {
 }
 
 func newApp(_ struct{}, deps appDeps) (*app, error) {
-	return &app{services: deps.Services}, nil
+	return &app{services: deps.Services, commands: deps.Commands}, nil
 }
 
 func newCompaction() (*compactionService, error) { return &compactionService{}, nil }
 
 func newSession() (*sessionService, error) { return &sessionService{}, nil }
 
+func newRegistry() (*Registry, error) {
+	return NewRegistry(), nil
+}
+
 func init() {
 	pluginkit.Register("app", newApp)
 	pluginkit.Register("compaction", newCompaction)
 	pluginkit.Register("session", newSession)
+	pluginkit.Register("commands", newRegistry)
 }
 
 func main() {
@@ -130,12 +141,16 @@ func main() {
 	}
 
 	providers := build.Collect[Provider](result)
-	registry, err := NewRegistry(providers)
-	if err != nil {
+	if err := build.WireSetter[Provider](result); err != nil {
 		fatal(err)
+	}
+	registry := app.commands
+	if registry == nil {
+		fatal(fmt.Errorf("commands registry not found"))
 	}
 
 	fmt.Printf("app services: %d\n", len(app.services))
+	fmt.Printf("providers collected: %d\n", len(providers))
 	for _, inst := range build.CollectInstances[Provider](result) {
 		fmt.Printf("provider %s (%s)\n", inst.ID, inst.Use)
 	}
