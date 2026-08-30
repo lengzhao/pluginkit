@@ -1,6 +1,7 @@
 // Package build 在启动期按配置构造插件实例图。
 //
 // Build 按 root id 构造一个类型化根实例；BuildInto 按目标 struct 填充多个扩展点。
+// Scaffold / ScaffoldYAML 从目标 struct 反向生成 BuildInto 配置，默认引用所有兼容插件。
 // 包内会先编译装配计划，再按依赖顺序执行构造。
 // Collect 和 CollectInstances 可从 Result 中按类型筛选已构造实例。
 // WireContributions 和 WireSetter 可把贡献者实例后置装配到收集器，避免构建图循环依赖。

@@ -524,6 +524,15 @@ func Build[T any](ctx context.Context, graph map[string]any, rootID string) (T, 
 
 func BuildInto(ctx context.Context, plugins map[string]any, target any) (*Result, error)
 
+type ScaffoldOptions struct {
+    Whitelist []string
+    Blacklist []string
+}
+
+func Scaffold(target any, opts ScaffoldOptions) (map[string]any, error)
+
+func ScaffoldYAML(target any, opts ScaffoldOptions) ([]byte, error)
+
 func GetByID[T any](result *Result, id string) (T, bool)
 
 func RequireByID[T any](result *Result, field string, id string) (T, error)
@@ -549,6 +558,17 @@ var ErrNoContributionsCollector error
 `Build[T]` 是默认入口：把配置看成实例图，`rootID` 指定最终要构造的根实例。`Build` 从 root 出发递归收集 `deps`，把内联私有插件展开成带路径 id 的实例节点，生成不可导出的装配 plan，随后 executor 按拓扑顺序解码 `Config`、注入 `Deps`、调用构造函数，并检查 root 实例能否作为 `T` 返回。
 
 `BuildInto` 是 target struct 入口：读目标 struct、对照 `config.Parse` 的结果检查单值/多值，并把构造结果写回 target。它适合 Agent 这类需要一次装配多个扩展点的场景。
+
+`Scaffold` / `ScaffoldYAML` 是 `BuildInto` 的反向入口：只提供 target struct，框架 inspect 字段类型后从注册表挑选兼容插件生成配置。slice 字段包含所有兼容插件；单值字段默认选第一个，并在 YAML 的 `use` 行附加 `default` / `alternatives` 注释。插件 deps 递归展开；若存在唯一匹配的顶层单值扩展点，deps 优先引用其实例 id。实例 `id` 默认等于 kind，冲突时追加 `-2`、`-3`。`ScaffoldOptions.Whitelist` 非空时只保留名单内 kind；`Blacklist` 始终排除对应 kind。
+
+```go
+yamlBytes, err := build.ScaffoldYAML(&AgentPlugins{}, build.ScaffoldOptions{
+    Whitelist: []string{"openai", "read-file", "shell"},
+    Blacklist: []string{"legacy-tool"},
+})
+```
+
+生成结果可直接交给 `BuildInto`，也可由使用方落盘后再编辑。
 
 `Collect[T]` 从 `Result` 筛选可断言为 `T` 的实例，不执行装配。`CollectInstances[T]` 额外保留实例 `id` 和 `kind`。
 

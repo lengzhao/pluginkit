@@ -5,7 +5,7 @@
 ```
 github.com/lengzhao/pluginkit          插件类型：Register / Lookup / Describe
 github.com/lengzhao/pluginkit/config   配置识别：PluginUse / Parse
-github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / GetByID / Collect
+github.com/lengzhao/pluginkit/build    实例化：Build / BuildInto / Scaffold / GetByID / Collect
 github.com/lengzhao/pluginkit/manager  Web 配置管理 UI（可选）
 ```
 
