@@ -5,6 +5,7 @@
 // 出现循环引用（A → B → A）时停止展开并标注。
 import {
   state,
+  edit,
   selectPath,
   hasError,
   subtreeHasError,
@@ -139,6 +140,11 @@ function appendNode(container, node, depth, refChain, isRoot = false) {
     }
   }
 
+  // 非 root 节点对应某个槽位项，与列表模式一致提供删除。
+  if (!isRoot) {
+    row.appendChild(makeRemoveButton(node.path, "删除"));
+  }
+
   row.addEventListener("click", () => {
     state.navFrom = null;
     selectPath(node.path);
@@ -234,6 +240,9 @@ function appendRef(container, item, depth, refChain) {
     row.appendChild(makeBadge("未找到定义", "err"));
   }
 
+  // × 解除该位置的引用（不删除共享定义），与列表模式语义一致。
+  row.appendChild(makeRemoveButton(item.path, "解除引用"));
+
   row.addEventListener("click", () => {
     state.navFrom = null;
     selectPath(target);
@@ -270,6 +279,21 @@ function makeToggle({ path, expandable, folded, onToggle }) {
     onToggle(path);
     // 折叠/展开是纯 UI 态，只重绘画布，不触发完整 render。
     renderCanvas();
+  });
+  return btn;
+}
+
+// makeRemoveButton 生成行尾 ×，悬停行时可见（CSS 控制）。
+function makeRemoveButton(path, title) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tv-remove";
+  btn.title = title;
+  btn.setAttribute("aria-label", title);
+  btn.textContent = "×";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    edit({ type: "remove", path });
   });
   return btn;
 }

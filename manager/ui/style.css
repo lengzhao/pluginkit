@@ -803,6 +803,26 @@ dialog textarea {
 .tv-badge.err { border-color: var(--danger); color: var(--danger); }
 .tv-badge.warn { border-color: var(--warn); color: var(--warn); }
 
+.tv-remove {
+  flex: none;
+  margin-left: auto;
+  width: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.tv-row:hover .tv-remove,
+.tv-remove:focus-visible { opacity: 1; }
+
+.tv-remove:hover { color: var(--danger); }
+
 @media (max-width: 1100px) {
   .layout { grid-template-columns: var(--nav-width) 1fr 320px; }
   .layout.nav-collapsed { grid-template-columns: 0 1fr 320px; }
