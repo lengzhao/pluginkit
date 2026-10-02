@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>pluginkit manager</title>
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
   <header class="toolbar">
@@ -39,6 +39,7 @@
     </aside>
     <button id="navExpand" type="button" class="nav-expand" hidden title="展开导航" aria-label="展开导航">›</button>
     <section id="canvas" class="canvas" aria-label="主画布">
+      <div id="canvasToolbar" class="canvas-toolbar" hidden></div>
       <div id="canvasBody" class="canvas-body"></div>
     </section>
     <aside id="inspector" class="inspector">
@@ -70,6 +71,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=17"></script>
+  <script type="module" src="app.js?v=18"></script>
 </body>
 </html>

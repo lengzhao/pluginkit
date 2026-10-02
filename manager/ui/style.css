@@ -679,6 +679,113 @@ dialog textarea {
 .toast-warn { border-color: rgba(255, 176, 32, 0.5); color: var(--warn); }
 .toast-err { border-color: rgba(255, 107, 107, 0.5); color: var(--danger); }
 
+/* ---- 画布模式切换 ---- */
+
+.canvas-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.mode-btn {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mode-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1220;
+}
+
+/* ---- 树状模式 ---- */
+
+.treeview {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+}
+
+.tv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  line-height: 1.6;
+}
+
+.tv-row:hover { background: var(--panel-2); }
+
+.tv-row.selected {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.tv-row.has-error { border-left: 2px solid var(--danger); }
+
+.tv-toggle {
+  width: 18px;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.tv-toggle:disabled { cursor: default; opacity: 0.4; }
+
+.tv-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tv-kind { font-weight: 600; }
+
+.tv-slot .tv-slot-name { color: var(--accent-2); }
+
+.tv-ref { color: var(--accent); }
+
+.tv-path {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tv-empty { color: var(--warn); font-size: 11px; }
+
+.tv-badge {
+  flex: none;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.tv-badge.err { border-color: var(--danger); color: var(--danger); }
+.tv-badge.warn { border-color: var(--warn); color: var(--warn); }
+
 @media (max-width: 1100px) {
   .layout { grid-template-columns: var(--nav-width) 1fr 320px; }
   .layout.nav-collapsed { grid-template-columns: 0 1fr 320px; }
