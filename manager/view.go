@@ -2,6 +2,7 @@ package manager
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/lengzhao/pluginkit"
 )
@@ -37,10 +38,15 @@ type ViewSlot struct {
 }
 
 // ViewField 是检查器里的一个 config 字段。
+// Kind 是前端渲染控件的类型归类：string / number / bool / json（复杂类型兜底）。
+// Default 是插件 Defaulter 给出的默认值，未实现 Defaulter 时为 nil。
 type ViewField struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value any    `json:"value"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Kind     string `json:"kind"`
+	Optional bool   `json:"optional,omitempty"`
+	Value    any    `json:"value"`
+	Default  any    `json:"default,omitempty"`
 }
 
 // RefCandidate 是空槽可引用的已有共享实例。
@@ -82,15 +88,17 @@ func projectNode(doc Document, path, role string, node PluginNode, id string, co
 	if !ok {
 		return out
 	}
-	out.Config = projectConfig(desc.Config, node.Config)
+	out.Config = projectConfig(desc, node.Config)
 	out.Slots = projectSlots(doc, path, node, desc.Extensions, counts, resolve)
 	return out
 }
 
-func projectConfig(fields []pluginkit.FieldDescription, cfg map[string]any) []ViewField {
+func projectConfig(desc pluginkit.PluginDescription, cfg map[string]any) []ViewField {
+	fields := desc.Config
 	if len(fields) == 0 {
 		return nil
 	}
+	defaults := desc.ConfigDefaults()
 	out := make([]ViewField, 0, len(fields))
 	for _, field := range fields {
 		var value any
@@ -98,12 +106,42 @@ func projectConfig(fields []pluginkit.FieldDescription, cfg map[string]any) []Vi
 			value = cfg[field.Name]
 		}
 		out = append(out, ViewField{
-			Name:  field.Name,
-			Type:  pluginkit.FormatType(field.Type),
-			Value: value,
+			Name:     field.Name,
+			Type:     pluginkit.FormatType(field.Type),
+			Kind:     fieldKind(field),
+			Optional: field.Optional,
+			Value:    value,
+			Default:  defaults[field.Name],
 		})
 	}
 	return out
+}
+
+// fieldKind 把字段类型归类为前端控件类型：string / number / bool / json。
+// 多值字段（List）一律归为 json，由 JSON 编辑器兜底。
+func fieldKind(field pluginkit.FieldDescription) string {
+	if field.List {
+		return "json"
+	}
+	t := field.Type
+	if t == nil {
+		return "json"
+	}
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "number"
+	default:
+		return "json"
+	}
 }
 
 func projectSlots(doc Document, parentPath string, node PluginNode, exts []pluginkit.FieldDescription, counts map[string]int, resolve instanceResolver) []ViewSlot {

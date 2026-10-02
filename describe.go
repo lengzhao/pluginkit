@@ -11,6 +11,8 @@ type PluginDescription struct {
 	Config     []FieldDescription
 	Extensions []FieldDescription
 	ReturnType reflect.Type
+
+	configType reflect.Type
 }
 
 // FieldDescription 描述 struct 顶层字段的配置名、Go 名、类型和单值/多值/可选规则。
@@ -34,15 +36,17 @@ func Describe(kind string) (PluginDescription, bool) {
 		Config:     describeStructFields(spec.ConfigType),
 		Extensions: describeStructFields(spec.DepsType),
 		ReturnType: spec.ReturnType,
+		configType: spec.ConfigType,
 	}, true
 }
 
 // Template 返回可填入配置的骨架，格式与 build 接受的 PluginUse 一致。
-// init() 注册后即可调用，不构造实例。config 字段为零值占位；deps 使用 use: "" 占位；
+// init() 注册后即可调用，不构造实例。Config 实现 Defaulter 时 config 字段填
+// SetDefaults 后的真实默认值，否则为零值占位；deps 使用 use: "" 占位；
 // 可选 deps 会省略。
 func (d PluginDescription) Template() map[string]any {
 	tmpl := map[string]any{"use": d.Kind}
-	if cfg := templateConfig(d.Config); len(cfg) > 0 {
+	if cfg := templateConfig(d.Config, d.configDefaults()); len(cfg) > 0 {
 		tmpl["config"] = cfg
 	}
 	if deps := templateDeps(d.Extensions); len(deps) > 0 {
@@ -102,13 +106,51 @@ func jsonFieldName(sf reflect.StructField) (name string, optional bool, skip boo
 	return name, strings.Contains(opts, "omitempty"), false
 }
 
-func templateConfig(fields []FieldDescription) map[string]any {
+// ConfigDefaults 返回 SetDefaults 后的默认配置，key 为 json 字段名。
+// Config 未实现 Defaulter 时返回 nil。供 manager 等工具标注字段默认值，不构造实例。
+func (d PluginDescription) ConfigDefaults() map[string]any {
+	defaults := d.configDefaults()
+	if !defaults.IsValid() {
+		return nil
+	}
+	out := make(map[string]any, len(d.Config))
+	for _, field := range d.Config {
+		fv := defaults.FieldByName(field.GoName)
+		if fv.IsValid() && fv.CanInterface() {
+			out[field.Name] = fv.Interface()
+		}
+	}
+	return out
+}
+
+// configDefaults 返回 SetDefaults 后的 Config 值；Config 未实现 Defaulter 时返回无效 Value。
+func (d PluginDescription) configDefaults() reflect.Value {
+	st := d.configType
+	if st == nil {
+		return reflect.Value{}
+	}
+	if st.Kind() == reflect.Pointer {
+		st = st.Elem()
+	}
+	if st.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	ptr := reflect.New(st)
+	df, ok := ptr.Interface().(Defaulter)
+	if !ok {
+		return reflect.Value{}
+	}
+	df.SetDefaults()
+	return ptr.Elem()
+}
+
+func templateConfig(fields []FieldDescription, defaults reflect.Value) map[string]any {
 	if len(fields) == 0 {
 		return nil
 	}
 	cfg := make(map[string]any, len(fields))
 	for _, field := range fields {
-		cfg[field.Name] = templateFieldValue(field)
+		cfg[field.Name] = templateFieldValue(field, defaults)
 	}
 	return cfg
 }
@@ -127,7 +169,19 @@ func templateDeps(fields []FieldDescription) map[string]any {
 	return deps
 }
 
-func templateFieldValue(field FieldDescription) any {
+func templateFieldValue(field FieldDescription, defaults reflect.Value) any {
+	if defaults.IsValid() {
+		fv := defaults.FieldByName(field.GoName)
+		if fv.IsValid() && fv.CanInterface() {
+			if field.List {
+				if fv.Kind() == reflect.Slice && fv.Len() > 0 {
+					return fv.Interface()
+				}
+			} else {
+				return fv.Interface()
+			}
+		}
+	}
 	if field.List {
 		return []any{zeroValueForType(field.Type)}
 	}

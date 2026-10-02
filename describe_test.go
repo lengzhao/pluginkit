@@ -158,6 +158,82 @@ func TestPluginDescriptionTemplate(t *testing.T) {
 	}
 }
 
+type describeDefaultCfg struct {
+	Model   string `json:"model"`
+	Timeout int    `json:"timeout"`
+}
+
+func (c *describeDefaultCfg) SetDefaults() {
+	if c.Model == "" {
+		c.Model = "gpt-5.5"
+	}
+	if c.Timeout == 0 {
+		c.Timeout = 30
+	}
+}
+
+func TestPluginDescriptionTemplateDefaults(t *testing.T) {
+	resetRegistry()
+	t.Cleanup(resetRegistry)
+
+	kind := t.Name() + "/plugin"
+	if err := register(kind, func(cfg describeDefaultCfg) (*describePlugin, error) {
+		return &describePlugin{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	desc, ok := Describe(kind)
+	if !ok {
+		t.Fatal("Describe returned ok=false")
+	}
+	tmpl := desc.Template()
+	cfg, ok := tmpl["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("config=%#v", tmpl["config"])
+	}
+	if cfg["model"] != "gpt-5.5" {
+		t.Fatalf("model=%v want gpt-5.5", cfg["model"])
+	}
+	if cfg["timeout"] != 30 {
+		t.Fatalf("timeout=%v want 30", cfg["timeout"])
+	}
+}
+
+func TestPluginDescriptionConfigDefaults(t *testing.T) {
+	resetRegistry()
+	t.Cleanup(resetRegistry)
+
+	withDefaults := t.Name() + "/with"
+	if err := register(withDefaults, func(cfg describeDefaultCfg) (*describePlugin, error) {
+		return &describePlugin{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	desc, ok := Describe(withDefaults)
+	if !ok {
+		t.Fatal("Describe returned ok=false")
+	}
+	defaults := desc.ConfigDefaults()
+	if defaults["model"] != "gpt-5.5" || defaults["timeout"] != 30 {
+		t.Fatalf("ConfigDefaults=%#v", defaults)
+	}
+
+	withoutDefaults := t.Name() + "/without"
+	if err := register(withoutDefaults, func(cfg describeCfg) (*describePlugin, error) {
+		return &describePlugin{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	desc2, ok := Describe(withoutDefaults)
+	if !ok {
+		t.Fatal("Describe returned ok=false")
+	}
+	if got := desc2.ConfigDefaults(); got != nil {
+		t.Fatalf("ConfigDefaults=%#v want nil", got)
+	}
+}
+
 func TestPluginDescriptionTemplateNoConfigOrDeps(t *testing.T) {
 	resetRegistry()
 	t.Cleanup(resetRegistry)

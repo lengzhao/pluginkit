@@ -140,10 +140,9 @@ func construct(n *node, constructed map[string]any) (any, error) {
 	var args []reflect.Value
 
 	if spec.ConfigType != nil {
-		raw := n.use.Config
-		val, err := decodeValue(spec.ConfigType, raw)
+		val, err := prepareConfig(n)
 		if err != nil {
-			return nil, assembleErr(n.field, n.use.Use, n.use.ID, StageDecode, err)
+			return nil, err
 		}
 		args = append(args, val)
 	} else if len(n.use.Config) > 0 {

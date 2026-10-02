@@ -8,6 +8,7 @@ type Stage string
 const (
 	StageResolve   Stage = "resolve"
 	StageDecode    Stage = "decode"
+	StageValidate  Stage = "validate"
 	StageDeps      Stage = "deps"
 	StageConstruct Stage = "construct"
 	StageTypeCheck Stage = "typecheck"

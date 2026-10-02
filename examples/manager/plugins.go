@@ -53,7 +53,27 @@ func (a *agent) LLM() LLM { return a.llm }
 func (a *agent) Tools() []Tool { return a.tools }
 
 type openaiCfg struct {
-	Model string `json:"model"`
+	Model   string `json:"model"`
+	Timeout int    `json:"timeout,omitempty"`
+	Debug   bool   `json:"debug,omitempty"`
+}
+
+// SetDefaults 实现 pluginkit.Defaulter：装配期填充默认值。
+func (c *openaiCfg) SetDefaults() {
+	if c.Model == "" {
+		c.Model = "gpt-5.5"
+	}
+	if c.Timeout == 0 {
+		c.Timeout = 30
+	}
+}
+
+// Validate 实现 pluginkit.Validator：配置错误在装配期响亮报出。
+func (c *openaiCfg) Validate() error {
+	if c.Timeout < 0 {
+		return fmt.Errorf("timeout must be >= 0, got %d", c.Timeout)
+	}
+	return nil
 }
 
 type openai struct{ model string }

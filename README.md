@@ -137,7 +137,16 @@ if !ok {
 tmpl := desc.Template()
 ```
 
-`Template()` 返回 `map[string]any`，格式与 `build.Build` 接受的 `PluginUse` 一致。`config` 为零值占位，必填 `deps` 用 `use: ""` 占位，可选 `deps` 会省略。需要 YAML 时由使用方自行 `yaml.Marshal(tmpl)`。
+`Template()` 返回 `map[string]any`，格式与 `build.Build` 接受的 `PluginUse` 一致。Config 实现 `Defaulter` 时 `config` 填 `SetDefaults` 后的真实默认值，否则为零值占位；必填 `deps` 用 `use: ""` 占位，可选 `deps` 会省略。需要 YAML 时由使用方自行 `yaml.Marshal(tmpl)`。
+
+插件的 Config 类型可选实现两个接口，build 在 decode 之后、`New` 之前依次调用：
+
+```go
+type Defaulter interface{ SetDefaults() }    // 填充默认值，不返回 error
+type Validator interface{ Validate() error } // 校验失败作为 validate 阶段错误响亮报出
+```
+
+约定零值视为未配置；需要区分显式零值时使用指针字段。详见 `docs/2026-10-02-config-defaults-validation.md`。
 
 ```yaml
 use: agent

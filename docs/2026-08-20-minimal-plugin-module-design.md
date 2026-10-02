@@ -403,7 +403,7 @@ flowchart LR
 ```
 
 - plan 阶段只做解析、root 可达性收集、扩展点匹配、注册表查询、静态类型检查、id 唯一性检查、依赖图排序和 target 绑定计划。
-- execute 阶段只按 plan 解码 `Config`、注入 `Deps`、调用 `New`、做运行时类型检查，并在 target 模式下把结果写入 target。
+- execute 阶段只按 plan 解码 `Config`、执行配置钩子（`SetDefaults` / `Validate`，见 11.1）、注入 `Deps`、调用 `New`、做运行时类型检查，并在 target 模式下把结果写入 target。
 - 使用方不需要感知 plan 或 executor，默认入口仍然是 `Build`。
 
 构造完成后：
@@ -465,11 +465,17 @@ type FieldDescription struct {
 func Describe(kind string) (PluginDescription, bool)
 
 func (d PluginDescription) Template() map[string]any
+
+type Defaulter interface{ SetDefaults() }
+
+type Validator interface{ Validate() error }
 ```
+
+插件的 Config 类型可选实现 `Defaulter` / `Validator`：build 在 decode 之后、`New` 之前依次调用 `SetDefaults()` 填充默认值、`Validate()` 响亮报错（`validate` 阶段）。两个接口都是可选的；`SetDefaults` 不返回 error；方法定义在指针接收者上时，值类型 Config 由框架自动取地址。约定零值视为未配置，需要区分显式零值时使用指针字段。同一条 decode → defaults → validate 管线被 `Build`、`ValidatePlan`（聚合全图错误，不调用 `New`）和 `Template`（填真实默认值）复用。详见 `docs/2026-10-02-config-defaults-validation.md`。
 
 `Describe` 按 kind 返回已注册插件类型的元信息：配置字段来自 `ConfigType`，依赖扩展点字段来自 `DepsType`。字段名遵循 `json` tag；`omitempty` 表示可选；slice 表示多值。未注册时返回 `false`，不报错。该 API 只描述插件自身 config/deps，不枚举所有插件，不判断插件可放入哪些业务扩展点，也不构造实例。
 
-`PluginDescription.Template` 在 `init()` 注册后即可生成可填写的配置骨架，不调用 `New`。返回格式与 `build` 接受的 `PluginUse` 一致：`config` 为零值占位，必填 `deps` 用 `use: ""` 占位，可选 `deps` 省略。需要 YAML 时由使用方自行 marshal，根包不绑定 YAML/JSON 库。
+`PluginDescription.Template` 在 `init()` 注册后即可生成可填写的配置骨架，不调用 `New`。返回格式与 `build` 接受的 `PluginUse` 一致：Config 实现 `Defaulter` 时 `config` 填 `SetDefaults` 后的真实默认值，否则为零值占位；必填 `deps` 用 `use: ""` 占位，可选 `deps` 省略。需要 YAML 时由使用方自行 marshal，根包不绑定 YAML/JSON 库。
 
 根包只描述「有哪些插件类型」。不出现 `PluginUse`，不读配置、不构造实例。
 
@@ -690,6 +696,7 @@ cache:
 | 未知插件 | `use` 没有注册 |
 | 构造函数非法 | `New` 参数或返回值不符合规则 |
 | config 解码失败 | `config` 不能解到 `Config`；未知字段也会失败（`encoding/json` `DisallowUnknownFields`） |
+| config 校验失败 | Config 的 `Validate()` 返回 error |
 | deps 引用失败 | `deps.store` 指向不存在实例 |
 | deps 类型不匹配 | 依赖实例不满足 `Deps` 字段接口 |
 | 字段类型不匹配 | 构造结果不满足 target 字段接口 |
@@ -701,7 +708,7 @@ cache:
 - 目标字段名。
 - 插件 `use`。
 - 实例 `id`。
-- 阶段：`resolve` / `decode` / `deps` / `construct` / `typecheck`。
+- 阶段：`resolve` / `decode` / `validate` / `deps` / `construct` / `typecheck`。
 
 ## 14. Agent 示例
 

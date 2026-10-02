@@ -386,7 +386,7 @@ function renderInstanceCanvas(body, node) {
 function getInspectorFocusState() {
   const body = els.inspectorBody;
   const active = document.activeElement;
-  if (!active || !body.contains(active) || active.tagName !== "INPUT") {
+  if (!active || !body.contains(active) || (active.tagName !== "INPUT" && active.tagName !== "TEXTAREA")) {
     return null;
   }
   const field = active.dataset.field;
@@ -401,7 +401,7 @@ function getInspectorFocusState() {
 function restoreInspectorFocus(focus) {
   if (!focus) return;
   const input = els.inspectorBody.querySelector(
-    `input[data-field="${CSS.escape(focus.field)}"]`
+    `[data-field="${CSS.escape(focus.field)}"]`
   );
   if (!input) return;
   input.focus();
@@ -758,6 +758,59 @@ function renderSlotFillInspector(body, slot, diags) {
   appendDiagnostics(body, diags);
 }
 
+// fieldControl 按字段 kind 渲染对应控件：bool → checkbox，number → 数字框，
+// string → 文本框，其余（slice/map/struct 等）→ JSON textarea 兜底。
+function fieldControl(field) {
+  const kind = field.kind || "json";
+  let input;
+  if (kind === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = field.value === true;
+  } else if (kind === "number") {
+    input = document.createElement("input");
+    input.type = "number";
+    input.step = "any";
+    input.value = field.value ?? "";
+  } else if (kind === "string") {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = field.value ?? "";
+  } else {
+    input = document.createElement("textarea");
+    input.rows = 2;
+    input.value = field.value === undefined || field.value === null ? "" : JSON.stringify(field.value);
+  }
+  input.dataset.field = field.name;
+  input.dataset.kind = kind;
+  return input;
+}
+
+// readFieldValue 把控件内容还原为 JSON 类型。
+// skip 表示留空（不提交该字段，由插件 SetDefaults 兜底）；ok=false 表示输入非法。
+function readFieldValue(el) {
+  switch (el.dataset.kind) {
+    case "bool":
+      return { ok: true, value: el.checked };
+    case "number": {
+      if (el.value.trim() === "") return { ok: true, skip: true };
+      const n = Number(el.value);
+      return Number.isNaN(n) ? { ok: false } : { ok: true, value: n };
+    }
+    case "json": {
+      const text = el.value.trim();
+      if (text === "") return { ok: true, skip: true };
+      try {
+        return { ok: true, value: JSON.parse(text) };
+      } catch {
+        return { ok: false };
+      }
+    }
+    default:
+      return { ok: true, value: el.value };
+  }
+}
+
 function renderNodeInspector(body, node, diags) {
   body.innerHTML = `
     <div class="inspector-title">${escapeHtml(node.kind || node.role)}</div>
@@ -791,22 +844,37 @@ function renderNodeInspector(body, node, diags) {
       const row = document.createElement("div");
       row.className = "field-row";
       const label = document.createElement("label");
-      label.textContent = `${field.name} (${field.type})`;
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = field.value ?? "";
-      input.dataset.field = field.name;
+      const caption = document.createElement("span");
+      caption.className = "field-caption";
+      caption.textContent = `${field.name} (${field.type})${field.optional ? " · 可选" : ""}`;
+      const input = fieldControl(field);
       let timer;
       input.addEventListener("input", () => {
+        input.classList.remove("invalid");
         clearTimeout(timer);
         timer = setTimeout(() => {
-          const cfg = Object.fromEntries(
-            [...form.querySelectorAll("input[data-field]")].map((el) => [el.dataset.field, el.value])
-          );
+          const cfg = {};
+          let valid = true;
+          for (const el of form.querySelectorAll("[data-field]")) {
+            const r = readFieldValue(el);
+            if (!r.ok) {
+              el.classList.add("invalid");
+              valid = false;
+              continue;
+            }
+            if (!r.skip) cfg[el.dataset.field] = r.value;
+          }
+          if (!valid) return;
           edit({ type: "setConfig", path: node.path, config: cfg });
         }, 300);
       });
-      label.appendChild(input);
+      label.append(caption, input);
+      if (field.default !== undefined && field.default !== null && field.default !== "") {
+        const hint = document.createElement("span");
+        hint.className = "field-default";
+        hint.textContent = `默认：${typeof field.default === "object" ? JSON.stringify(field.default) : field.default}`;
+        label.appendChild(hint);
+      }
       row.appendChild(label);
       form.appendChild(row);
     }

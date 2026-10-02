@@ -139,7 +139,7 @@ YAML：导入支持选择文件或粘贴；导出直接下载 `{rootId}.yaml`（
 
 **填槽：** 点空槽 → 检查器列出兼容 kind，以及可引用的共享实例。选 kind 插入内联节点并选中它；选引用则写入 `→ id`。单值槽填满后改为「替换」；列表槽可继续追加。槽位内已填插件右侧有 ×：引用为解除引用，内联为删除。
 
-**配置：** 选中节点后按字段元数据出表单，防抖提交 `setConfig`。无 config 的插件不显示空表单。
+**配置：** 选中节点后按字段元数据出表单，防抖提交 `setConfig`。无 config 的插件不显示空表单。表单控件按字段类型归类（`ViewField.Kind`）：`string` → 文本框、`number` → 数字框、`bool` → 勾选框，多值与复杂类型（slice/map/struct）→ JSON 编辑器兜底；提交前按类型还原为 JSON 值，留空表示不提交该字段（由插件 `SetDefaults` 兜底）。插件实现 `Defaulter` 时字段带「默认」提示（`ViewField.Default`），`omitempty` 字段标注可选（`ViewField.Optional`）。
 
 **提取为共享：** 仅内联节点（非 root、非引用）。用户指定实例 id，该位置变成引用芯片，定义写入 `shared`。已是引用的节点不能再提取。
 
