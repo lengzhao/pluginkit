@@ -359,6 +359,17 @@ function renderCanvasToolbar() {
     return;
   }
   bar.hidden = false;
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "mode-btn nav-back-btn";
+  back.textContent = "← 返回";
+  back.disabled = !canGoBack();
+  back.title = canGoBack() ? "返回上一个选中位置" : "没有可返回的位置";
+  back.addEventListener("click", goBack);
+  bar.appendChild(back);
+  const sep = document.createElement("span");
+  sep.className = "toolbar-sep";
+  bar.appendChild(sep);
   for (const [name, def] of canvasModes) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -402,7 +413,33 @@ export function renderIssueCount() {
   els.issueCount.className = `issue-btn ${n === 0 ? "ok" : "err"}`;
 }
 
+// 选择历史：每次切换选中压栈，供工具栏「← 返回」回退。纯 UI 态，不入文档。
+const pathHistory = [];
+const HISTORY_LIMIT = 100;
+
+export function canGoBack() {
+  return pathHistory.length > 0;
+}
+
+// clearPathHistory 在文档整表替换（导入 YAML）时调用，避免返回到旧文档的 path。
+export function clearPathHistory() {
+  pathHistory.length = 0;
+}
+
+export function goBack() {
+  const prev = pathHistory.pop();
+  if (!prev) return;
+  state.selectedPath = prev;
+  state.navFrom = null;
+  render();
+  scrollToSelected(prev);
+}
+
 export function selectPath(path, { navFrom = null } = {}) {
+  if (state.selectedPath && state.selectedPath !== path) {
+    pathHistory.push(state.selectedPath);
+    if (pathHistory.length > HISTORY_LIMIT) pathHistory.shift();
+  }
   state.selectedPath = path;
   state.navFrom = navFrom;
   render();
@@ -524,6 +561,7 @@ export async function loadYAML(yaml, { confirmReplace = true } = {}) {
   });
   await applyEditResponse(data);
   emitHostEvent("load", data, "importYAML");
+  clearPathHistory();
   state.navFrom = null;
   state.selectedPath = "root";
   render();
